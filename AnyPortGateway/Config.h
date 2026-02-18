@@ -23,8 +23,14 @@
 #include <SPI.h>
 #include <Ethernet.h>
 #include <Preferences.h>
-#include <WebSocketsServer.h>
+// PubSubClient 缓冲区扩容：默认 256 字节，topic 较长时 publish 会静默失败
+// 必须在 #include <PubSubClient.h> 之前定义
+#ifndef MQTT_MAX_PACKET_SIZE
+#define MQTT_MAX_PACKET_SIZE 1024
+#endif
+#include <PubSubClient.h>
 #include <ArduinoJson.h>
+#include <WebServer.h>
 
 /*
  * ---------------------------
@@ -81,21 +87,30 @@ static const int PIN_W5500_INT  = 3;   // W5500 中断引脚（INT，可选）
 //
 // 下列引脚定义假设：
 //   - 使用 UART1 作为 RS485 通道；
-//   - TX 使用 GPIO21，RX 使用 GPIO20。
+//   - TX 使用 GPIO1，RX 使用 GPIO0。
 //
-static const int PIN_RS485_TX    = 21;  // RS485 TX (UART1 TX)
-static const int PIN_RS485_RX    = 20;  // RS485 RX (UART1 RX)
+// 重要：ESP32-C3 的 GPIO20/GPIO21 是 USB D+/D- 引脚，
+// 如果使用 USB CDC 串口，这两个引脚不能用于 UART！
+static const int PIN_RS485_TX    = 1;   // RS485 TX (UART1 TX) — 避开 GPIO20/21(USB)
+static const int PIN_RS485_RX    = 0;   // RS485 RX (UART1 RX) — 避开 GPIO20/21(USB)
 
 // -----------------------
 // 1.3 WiFi 与系统相关配置
 // -----------------------
 
 // WiFi AP（软 AP）模式配置：AnyPort 前端通过此 SSID 连接到 ESP32 网关
-static constexpr const char* WIFI_AP_SSID     = "AnyPort-Gateway";
-static constexpr const char* WIFI_AP_PASSWORD = "AnyPort1234";
+static constexpr const char* WIFI_AP_SSID     = "anyport";
+static constexpr const char* WIFI_AP_PASSWORD = "12345678"; // WPA2 要求最少 8 位，6 位密码会导致 AP 创建失败并回退到默认 SSID
 
-// WebSocket 网关默认端口，与 AnyPort 前端的 wsPort 对应，推荐保持一致
-static const uint16_t DEFAULT_WEBSOCKET_PORT = 81;
+static constexpr const char* MQTT_BROKER_HOST   = "broker-cn.emqx.io"; // 中国节点，延迟低
+static const uint16_t        MQTT_BROKER_PORT   = 1883;
+static constexpr const char* MQTT_USERNAME      = "";
+static constexpr const char* MQTT_PASSWORD      = "";
+static constexpr const char* MQTT_TOPIC_PREFIX  = "anyport";
+static constexpr const char* MQTT_SITE_ID       = "office";
+static constexpr const char* MQTT_GATEWAY_ID    = "gateway-01";
+static const size_t          MQTT_JSON_DOC_SIZE = 1024;
+static constexpr const char* FIRMWARE_VERSION   = "1.0.0";
 
 // -----------------------
 // 1.4 Modbus 相关配置（占位定义）
@@ -123,14 +138,30 @@ static byte g_macAddress[6] = { 0x02, 0x00, 0x00, 0x00, 0xC3, 0x01 };
 // RS485 使用 UART1
 static HardwareSerial RS485Serial(1);
 
-// WebSocket 服务器与配置存储
+static uint32_t g_rs485CurrentBaud = RS485_DEFAULT_BAUDRATE;
+static uint32_t g_rs485CurrentConfig = SERIAL_8N1;
+static volatile bool g_rs485Busy = false;
+
 static Preferences g_prefs;
-static WebSocketsServer g_webSocket(0);
 
 // W5500 TCP 客户端，用于 Modbus TCP 透传
 static EthernetClient g_ethClient;
 
-// 当前 WebSocket 端口和以太网静态 IP 配置
+static WiFiClient g_mqttWifiClient;
+static PubSubClient g_mqttClient(g_mqttWifiClient);
+static unsigned long g_lastMqttReconnectAttempt = 0;
+
+struct MqttRuntimeConfig {
+    bool     valid;
+    String   host;
+    uint16_t port;
+    String   username;
+    String   password;
+    String   topicPrefix;
+    String   siteId;
+    String   gatewayId;
+};
+
 struct EthStaticConfig {
     bool     valid;
     IPAddress ip;
@@ -145,9 +176,11 @@ struct WifiStaConfig {
     String password;
 };
 
-static uint16_t       g_wsPort = DEFAULT_WEBSOCKET_PORT;
 static EthStaticConfig g_ethConfig = {};
 static WifiStaConfig   g_wifiStaConfig = {};
+static MqttRuntimeConfig g_mqttConfig = {};
+
+static WebServer g_httpServer(80);
 
 // Modbus RTU 接收缓冲区
 static uint8_t g_rtuRxBuffer[256];
@@ -155,6 +188,10 @@ static size_t  g_rtuRxLength = 0;
 
 // 全局标记：配置更新后是否需要重启
 static bool g_needRestart = false;
+
+// 心跳定时器
+static unsigned long g_lastHeartbeatMs = 0;
+static const unsigned long HEARTBEAT_INTERVAL_MS = 30000; // 30s 心跳
 
 // -----------------------
 // 3. 硬件初始化函数声明
@@ -173,32 +210,98 @@ static void initWifi();
 static void initSpiAndEthernet();
 static void loadPersistentConfig();
 static void applyEthConfig();
-static void startWebSocketServer();
-static void handleWebSocketLoop();
-static void handleWebSocketMessage(uint8_t num, WStype_t type, uint8_t* payload, size_t length);
-static void handleConfigMessage(JsonDocument& doc);
-static void handleModbusMessage(JsonDocument& doc, uint8_t clientId);
+static void initMqttClient();
+static void mqttLoop();
+static bool ensureMqttConnected();
+static void mqttCallback(char* topic, byte* payload, unsigned int length);
+static String buildMqttStatusTopic();
+static String buildMqttRequestFilter();
+static String buildMqttResponseTopic(const String& sessionId);
+static String buildMqttConfigTopic();
+static void handleMqttRequestMessage(const String& topic, const uint8_t* payload, unsigned int length);
+static void handleMqttConfigMessage(const String& topic, const uint8_t* payload, unsigned int length);
+static void initHttpServer();
+static void httpLoop();
+static void handleHttpRoot();
+static void handleHttpConfig();
 static bool parseIpAddress(const char* str, IPAddress& outIp);
 static bool hexStringToBytes(const char* hex, uint8_t* buffer, size_t bufferSize, size_t& outLength);
 static String bytesToHexString(const uint8_t* data, size_t length);
-static bool modbusTcpForward(const JsonDocument& doc, JsonDocument& resp);
-static bool modbusRtuForward(const JsonDocument& doc, JsonDocument& resp);
+static bool modbusTcpForward(JsonDocument& doc, JsonDocument& resp);
+static bool modbusRtuForward(JsonDocument& doc, JsonDocument& resp);
+static String buildStatusPayload(); // 构建完整状态 JSON
 
 // -----------------------
 // 4. 硬件初始化函数实现
 // -----------------------
 
 void anyportHardwareInit() {
+    // ESP32-C3 有两种串口：
+    //   - USB CDC (Serial)  : 通过 USB 口虚拟串口，Arduino IDE 串口监视器默认用这个
+    //   - UART0  (Serial0)  : 硬件 UART，GPIO20(RX)/GPIO21(TX)
+    //
+    // USB CDC 模式下：
+    //   1. Serial.begin() 的波特率参数被忽略（USB 速率固定）
+    //   2. !Serial 判断不可靠，会导致死等
+    //   3. 正确做法：begin() 后固定延迟等待 USB 枚举完成即可
+    Serial.begin(115200);
+    delay(500); // 等待 USB CDC 枚举完成，固定延迟比 while(!Serial) 更可靠
+
+    Serial.println();
+    Serial.println("=== AnyPort ESP32 Gateway Starting ===");
+    Serial.flush();
+
     initGpioPins();
+    Serial.println("[Init] GPIO OK");
+    Serial.flush();
+
     initRs485Port();
+    Serial.println("[Init] RS485 OK");
+    Serial.flush();
+
     loadPersistentConfig();
+    Serial.println("[Init] Config loaded");
+    Serial.print("  WiFi STA config valid: ");
+    Serial.println(g_wifiStaConfig.valid ? "YES" : "NO");
+    if (g_wifiStaConfig.valid) {
+        Serial.print("  STA SSID: ");
+        Serial.println(g_wifiStaConfig.ssid);
+    }
+    Serial.flush();
+
     initWifi();
+    Serial.flush();
+
     initSpiAndEthernet();
-    startWebSocketServer();
+    Serial.println("[Init] SPI/Ethernet OK");
+    Serial.flush();
+
+    initMqttClient();
+    Serial.println("[Init] MQTT client configured");
+    Serial.flush();
+
+    initHttpServer();
+    Serial.println("[Init] HTTP server started");
+    Serial.flush();
+
+    Serial.println("=== Hardware Init Done ===");
+    Serial.flush();
 }
 
 void anyportGatewayLoop() {
-    handleWebSocketLoop();
+    mqttLoop();
+    httpLoop();
+
+    // 心跳：每 30s 重新发布完整状态消息，让前端持续感知网关在线
+    if (g_mqttClient.connected()) {
+        unsigned long now = millis();
+        if (now - g_lastHeartbeatMs >= HEARTBEAT_INTERVAL_MS) {
+            g_lastHeartbeatMs = now;
+            String statusTopic = buildMqttStatusTopic();
+            String hbPayload = buildStatusPayload();
+            g_mqttClient.publish(statusTopic.c_str(), hbPayload.c_str(), true);
+        }
+    }
 
     if (g_needRestart) {
         delay(100);
@@ -218,7 +321,8 @@ static void initGpioPins() {
 }
 
 static void initRs485Port() {
-    // 将 UART1 映射到指定引脚，用于 RS485 通讯
+    g_rs485CurrentBaud = RS485_DEFAULT_BAUDRATE;
+    g_rs485CurrentConfig = SERIAL_8N1;
     RS485Serial.begin(
         RS485_DEFAULT_BAUDRATE,
         SERIAL_8N1,
@@ -228,10 +332,16 @@ static void initRs485Port() {
 }
 
 static void initWifi() {
-    g_prefs.begin("anyport", false);
+    // 关键：禁止 ESP32 从 NVS 读取/写入 WiFi 配置
+    // 不加此行，ESP32 会从 NVS 中读取旧的 SSID（如 ESP32_XXXXXX）覆盖代码设置
+    WiFi.persistent(false);
+    WiFi.disconnect(true); // 清除当前连接状态，确保从干净状态启动
+    delay(100);
 
     if (g_wifiStaConfig.valid) {
         WiFi.mode(WIFI_STA);
+        Serial.print("WiFi STA connecting to SSID: ");
+        Serial.println(g_wifiStaConfig.ssid);
         WiFi.begin(g_wifiStaConfig.ssid.c_str(), g_wifiStaConfig.password.c_str());
 
         unsigned long start = millis();
@@ -241,13 +351,31 @@ static void initWifi() {
         }
 
         if (WiFi.status() != WL_CONNECTED) {
+            Serial.println("WiFi STA connect failed, fallback to AP mode");
             WiFi.disconnect(true);
+            delay(200);
             WiFi.mode(WIFI_AP);
-            WiFi.softAP(WIFI_AP_SSID, WIFI_AP_PASSWORD);
+            delay(100);
+            bool apOk = WiFi.softAP(WIFI_AP_SSID, WIFI_AP_PASSWORD);
+            Serial.print("softAP result: ");
+            Serial.println(apOk ? "OK" : "FAILED");
         }
     } else {
         WiFi.mode(WIFI_AP);
-        WiFi.softAP(WIFI_AP_SSID, WIFI_AP_PASSWORD);
+        delay(100);
+        bool apOk = WiFi.softAP(WIFI_AP_SSID, WIFI_AP_PASSWORD);
+        Serial.print("softAP result: ");
+        Serial.println(apOk ? "OK" : "FAILED");
+    }
+
+    if (WiFi.getMode() == WIFI_STA && WiFi.status() == WL_CONNECTED) {
+        Serial.print("WiFi STA connected, IP: ");
+        Serial.println(WiFi.localIP());
+    } else if (WiFi.getMode() == WIFI_AP || WiFi.getMode() == WIFI_AP_STA) {
+        Serial.print("WiFi AP mode started, SSID: ");
+        Serial.println(WIFI_AP_SSID);
+        Serial.print("AP IP: ");
+        Serial.println(WiFi.softAPIP());
     }
 }
 
@@ -260,13 +388,23 @@ static void initSpiAndEthernet() {
         PIN_W5500_CS
     );
 
-    // 对 W5500 执行硬件复位：先拉低一段时间，再拉高
+    // 对 W5500 执行硬件复位
     digitalWrite(PIN_W5500_RST, LOW);
-    delay(10);  // 保持低电平 10ms，确保复位稳定
+    delay(10);
     digitalWrite(PIN_W5500_RST, HIGH);
-    delay(100); // 复位后等待 W5500 内部时钟和寄存器稳定
+    delay(200); // 等待 W5500 内部初始化
 
     Ethernet.init(static_cast<uint8_t>(PIN_W5500_CS));
+
+    // 检测 W5500 是否存在：读取版本寄存器（应为 0x04）
+    // 没有接 W5500 时跳过以太网初始化，避免卡死
+    uint8_t ver = Ethernet.hardwareStatus();
+    Serial.print("[Init] W5500 hardware status: ");
+    Serial.println(ver);
+    if (ver == EthernetNoHardware) {
+        Serial.println("[Init] W5500 not found, skip Ethernet init");
+        return;
+    }
 
     applyEthConfig();
 }
@@ -274,7 +412,14 @@ static void initSpiAndEthernet() {
 static void loadPersistentConfig() {
     g_prefs.begin("anyport", true);
 
-    g_wsPort = static_cast<uint16_t>(g_prefs.getUShort("wsPort", DEFAULT_WEBSOCKET_PORT));
+    g_mqttConfig.valid = false;
+    g_mqttConfig.host = MQTT_BROKER_HOST;
+    g_mqttConfig.port = MQTT_BROKER_PORT;
+    g_mqttConfig.username = MQTT_USERNAME;
+    g_mqttConfig.password = MQTT_PASSWORD;
+    g_mqttConfig.topicPrefix = MQTT_TOPIC_PREFIX;
+    g_mqttConfig.siteId = MQTT_SITE_ID;
+    g_mqttConfig.gatewayId = MQTT_GATEWAY_ID;
 
     if (g_prefs.isKey("ethIp") && g_prefs.isKey("ethMask")) {
         uint32_t ipRaw   = g_prefs.getUInt("ethIp", 0);
@@ -297,6 +442,17 @@ static void loadPersistentConfig() {
         g_wifiStaConfig.password = g_prefs.getString("wifiPwd", "");
     }
 
+    if (g_prefs.isKey("mqttHost")) {
+        g_mqttConfig.host = g_prefs.getString("mqttHost", g_mqttConfig.host);
+        g_mqttConfig.port = g_prefs.getUShort("mqttPort", g_mqttConfig.port);
+        g_mqttConfig.username = g_prefs.getString("mqttUser", g_mqttConfig.username);
+        g_mqttConfig.password = g_prefs.getString("mqttPwd", g_mqttConfig.password);
+        g_mqttConfig.topicPrefix = g_prefs.getString("mqttPrefix", g_mqttConfig.topicPrefix);
+        g_mqttConfig.siteId = g_prefs.getString("mqttSite", g_mqttConfig.siteId);
+        g_mqttConfig.gatewayId = g_prefs.getString("mqttGateway", g_mqttConfig.gatewayId);
+        g_mqttConfig.valid = true;
+    }
+
     g_prefs.end();
 }
 
@@ -314,127 +470,422 @@ static void applyEthConfig() {
     }
 }
 
-static void startWebSocketServer() {
-    g_webSocket.begin(g_wsPort);
-    g_webSocket.onEvent(handleWebSocketMessage);
+static String buildMqttStatusTopic() {
+    String prefix = g_mqttConfig.topicPrefix.length() > 0 ? g_mqttConfig.topicPrefix : String(MQTT_TOPIC_PREFIX);
+    String site = g_mqttConfig.siteId.length() > 0 ? g_mqttConfig.siteId : String(MQTT_SITE_ID);
+    String gateway = g_mqttConfig.gatewayId.length() > 0 ? g_mqttConfig.gatewayId : String(MQTT_GATEWAY_ID);
+
+    String topic = prefix;
+    topic += "/";
+    topic += site;
+    topic += "/";
+    topic += gateway;
+    topic += "/status";
+    return topic;
 }
 
-static void handleWebSocketLoop() {
-    g_webSocket.loop();
+static String buildMqttRequestFilter() {
+    String prefix = g_mqttConfig.topicPrefix.length() > 0 ? g_mqttConfig.topicPrefix : String(MQTT_TOPIC_PREFIX);
+    String site = g_mqttConfig.siteId.length() > 0 ? g_mqttConfig.siteId : String(MQTT_SITE_ID);
+    String gateway = g_mqttConfig.gatewayId.length() > 0 ? g_mqttConfig.gatewayId : String(MQTT_GATEWAY_ID);
+
+    String topic = prefix;
+    topic += "/";
+    topic += site;
+    topic += "/";
+    topic += gateway;
+    topic += "/request/+";
+    return topic;
 }
 
-static void handleWebSocketMessage(uint8_t num, WStype_t type, uint8_t* payload, size_t length) {
-    if (type != WStype_TEXT) {
-        return;
+static String buildMqttResponseTopic(const String& sessionId) {
+    String prefix = g_mqttConfig.topicPrefix.length() > 0 ? g_mqttConfig.topicPrefix : String(MQTT_TOPIC_PREFIX);
+    String site = g_mqttConfig.siteId.length() > 0 ? g_mqttConfig.siteId : String(MQTT_SITE_ID);
+    String gateway = g_mqttConfig.gatewayId.length() > 0 ? g_mqttConfig.gatewayId : String(MQTT_GATEWAY_ID);
+
+    String topic = prefix;
+    topic += "/";
+    topic += site;
+    topic += "/";
+    topic += gateway;
+    topic += "/response/";
+    topic += sessionId;
+    return topic;
+}
+
+static String buildMqttConfigTopic() {
+    String prefix = g_mqttConfig.topicPrefix.length() > 0 ? g_mqttConfig.topicPrefix : String(MQTT_TOPIC_PREFIX);
+    String site = g_mqttConfig.siteId.length() > 0 ? g_mqttConfig.siteId : String(MQTT_SITE_ID);
+    String gateway = g_mqttConfig.gatewayId.length() > 0 ? g_mqttConfig.gatewayId : String(MQTT_GATEWAY_ID);
+
+    String topic = prefix;
+    topic += "/";
+    topic += site;
+    topic += "/";
+    topic += gateway;
+    topic += "/config";
+    return topic;
+}
+
+static void initMqttClient() {
+    String host = g_mqttConfig.host.length() > 0 ? g_mqttConfig.host : String(MQTT_BROKER_HOST);
+    uint16_t port = g_mqttConfig.port != 0 ? g_mqttConfig.port : MQTT_BROKER_PORT;
+    g_mqttClient.setServer(host.c_str(), port);
+    g_mqttClient.setCallback(mqttCallback);
+    g_mqttClient.setKeepAlive(60);    // keepalive 60s
+    g_mqttClient.setSocketTimeout(10); // TCP 连接超时 10s
+}
+
+static bool ensureMqttConnected() {
+    if (g_mqttClient.connected()) {
+        return true;
     }
 
-    DynamicJsonDocument doc(1024);
+    unsigned long now = millis();
+    if (now - g_lastMqttReconnectAttempt < 5000) { // 重试间隔改为 5s，避免过于频繁
+        return false;
+    }
+    g_lastMqttReconnectAttempt = now;
+
+    if (WiFi.status() != WL_CONNECTED) {
+        Serial.println("[MQTT] WiFi not connected, skip MQTT reconnect");
+        return false;
+    }
+
+    // DNS 解析诊断：先确认域名能解析，避免 TCP 连接失败浪费时间
+    String mqttHost = g_mqttConfig.host.length() > 0 ? g_mqttConfig.host : String(MQTT_BROKER_HOST);
+    Serial.print("[MQTT] DNS server: ");
+    Serial.println(WiFi.dnsIP().toString());
+    IPAddress resolvedIp;
+    int dnsResult = WiFi.hostByName(mqttHost.c_str(), resolvedIp);
+    if (dnsResult != 1) {
+        Serial.print("[MQTT] DNS resolve FAILED for: ");
+        Serial.println(mqttHost);
+        Serial.println("[MQTT] Tip: check DNS server or use IP address instead");
+        return false;
+    }
+    Serial.print("[MQTT] DNS resolved: ");
+    Serial.print(mqttHost);
+    Serial.print(" -> ");
+    Serial.println(resolvedIp.toString());
+
+    // 直接用 IP 地址连接，避免 PubSubClient 内部再次 DNS 查询的不确定性
+    uint16_t mqttPort = g_mqttConfig.port != 0 ? g_mqttConfig.port : MQTT_BROKER_PORT;
+    g_mqttClient.setServer(resolvedIp, mqttPort);
+    Serial.print("[MQTT] TCP connecting to IP: ");
+    Serial.print(resolvedIp.toString());
+    Serial.print(":");
+    Serial.println(mqttPort);
+    String clientId = "anyport-esp32-";
+    clientId += String((uint32_t)ESP.getEfuseMac(), HEX);
+
+    String statusTopic = buildMqttStatusTopic();
+
+    Serial.print("[MQTT] Connecting to ");
+    Serial.print(g_mqttConfig.host);
+    Serial.print(":");
+    Serial.print(g_mqttConfig.port);
+    Serial.print(" clientId=");
+    Serial.println(clientId);
+    Serial.print("[MQTT] Status topic: ");
+    Serial.println(statusTopic);
+
+    StaticJsonDocument<64> willDoc;
+    willDoc["status"] = "offline";
+    String willPayload;
+    serializeJson(willDoc, willPayload);
+
+    bool ok;
+    const String& username = g_mqttConfig.username;
+    const String& password = g_mqttConfig.password;
+    if (username.length() > 0) {
+        ok = g_mqttClient.connect(
+            clientId.c_str(),
+            username.c_str(),
+            password.c_str(),
+            statusTopic.c_str(),
+            1,
+            true,
+            willPayload.c_str()
+        );
+    } else {
+        ok = g_mqttClient.connect(
+            clientId.c_str(),
+            statusTopic.c_str(),
+            1,
+            true,
+            willPayload.c_str()
+        );
+    }
+
+    if (!ok) {
+        Serial.print("[MQTT] Connect FAILED, state=");
+        Serial.println(g_mqttClient.state());
+        // state 说明：-4=超时, -3=连接拒绝, -2=连接失败, -1=断开, 1=协议错误, 2=clientId拒绝, 3=服务不可用, 4=用户名密码错误, 5=未授权
+        return false;
+    }
+
+    Serial.println("[MQTT] Connected!");
+
+    // 上线状态消息：包含 version、串口参数、IP 信息
+    String onlinePayload = buildStatusPayload();
+    bool pubOk = g_mqttClient.publish(statusTopic.c_str(), onlinePayload.c_str(), true);
+    Serial.print("[MQTT] Publish online status: ");
+    Serial.println(pubOk ? "OK" : "FAILED (buffer too small?)");
+    g_lastHeartbeatMs = millis(); // 重置心跳计时
+
+    String reqFilter = buildMqttRequestFilter();
+    g_mqttClient.subscribe(reqFilter.c_str(), 1);
+    Serial.print("[MQTT] Subscribed: ");
+    Serial.println(reqFilter);
+
+    String cfgTopic = buildMqttConfigTopic();
+    g_mqttClient.subscribe(cfgTopic.c_str(), 1);
+    Serial.print("[MQTT] Subscribed: ");
+    Serial.println(cfgTopic);
+
+    return true;
+}
+
+static void mqttLoop() {
+    if (!ensureMqttConnected()) {
+        return;
+    }
+    g_mqttClient.loop();
+}
+
+static void mqttCallback(char* topic, byte* payload, unsigned int length) {
+    String t(topic);
+    if (t.endsWith("/config")) {
+        handleMqttConfigMessage(t, payload, length);
+    } else {
+        handleMqttRequestMessage(t, payload, length);
+    }
+}
+
+static void handleMqttConfigMessage(const String& topic, const uint8_t* payload, unsigned int length) {
+    (void)topic;
+
+    DynamicJsonDocument doc(512);
     DeserializationError err = deserializeJson(doc, payload, length);
     if (err != DeserializationError::Ok) {
-        DynamicJsonDocument resp(256);
-        resp["status"] = "error";
-        resp["message"] = "invalid_json";
-        String out;
-        serializeJson(resp, out);
-        g_webSocket.sendTXT(num, out);
         return;
     }
 
-    if (doc.containsKey("type")) {
-        const char* t = doc["type"];
-        if (strcmp(t, "config") == 0) {
-            handleConfigMessage(doc);
-
-            DynamicJsonDocument resp(256);
-            resp["status"] = "ok";
-            resp["type"] = "config";
-            String out;
-            serializeJson(resp, out);
-            g_webSocket.sendTXT(num, out);
-            return;
-        }
+    JsonVariant mqtt = doc["mqtt"];
+    if (mqtt.isNull() || !mqtt.is<JsonObject>()) {
+        return;
     }
 
-    if (doc.containsKey("transport")) {
-        DynamicJsonDocument resp(512);
-        bool ok = false;
+    const char* host = mqtt["host"] | "";
+    uint16_t port = mqtt["port"] | MQTT_BROKER_PORT;
+    const char* username = mqtt["username"] | "";
+    const char* password = mqtt["password"] | "";
+    const char* prefix = mqtt["topicPrefix"] | "";
+    const char* site = mqtt["siteId"] | "";
+    const char* gateway = mqtt["gatewayId"] | "";
 
-        const char* transport = doc["transport"];
-        if (strcmp(transport, "tcp") == 0) {
-            ok = modbusTcpForward(doc, resp);
-        } else if (strcmp(transport, "rtu") == 0) {
-            ok = modbusRtuForward(doc, resp);
-        }
-
-        resp["status"] = ok ? "ok" : "error";
-        resp["transport"] = transport;
-
-        String out;
-        serializeJson(resp, out);
-        g_webSocket.sendTXT(num, out);
+    if (!host[0]) {
+        return;
     }
+
+    g_prefs.begin("anyport", false);
+    g_prefs.putString("mqttHost", host);
+    g_prefs.putUShort("mqttPort", port);
+    g_prefs.putString("mqttUser", username);
+    g_prefs.putString("mqttPwd", password);
+    g_prefs.putString("mqttPrefix", prefix);
+    g_prefs.putString("mqttSite", site);
+    g_prefs.putString("mqttGateway", gateway);
+    g_prefs.end();
+
+    g_mqttConfig.host = host;
+    g_mqttConfig.port = port;
+    g_mqttConfig.username = username;
+    g_mqttConfig.password = password;
+    g_mqttConfig.topicPrefix = prefix;
+    g_mqttConfig.siteId = site;
+    g_mqttConfig.gatewayId = gateway;
+    g_mqttConfig.valid = true;
+
+    g_needRestart = true;
 }
 
-static void handleConfigMessage(JsonDocument& doc) {
-    bool needSave = false;
+static void initHttpServer() {
+    g_httpServer.on("/", HTTP_GET, handleHttpRoot);
+    g_httpServer.on("/config", HTTP_POST, handleHttpConfig);
+    g_httpServer.begin();
+}
 
-    if (doc.containsKey("wsPort")) {
-        g_wsPort = static_cast<uint16_t>(doc["wsPort"].as<uint16_t>());
-        needSave = true;
+static void httpLoop() {
+    g_httpServer.handleClient();
+}
+
+static void handleHttpRoot() {
+    String html;
+    html.reserve(1024);
+    html += "<!DOCTYPE html><html><head><meta charset='utf-8'><title>AnyPort ESP32 配置</title></head><body>";
+    html += "<h1>AnyPort ESP32 配置</h1>";
+    html += "<form method='POST' action='/config'>";
+    html += "<h2>WiFi STA</h2>";
+    html += "SSID: <input name='wifiSsid' value='";
+    html += g_wifiStaConfig.ssid;
+    html += "'><br>";
+    html += "密码: <input name='wifiPwd' type='password' value='";
+    html += g_wifiStaConfig.password;
+    html += "'><br>";
+    html += "<h2>MQTT</h2>";
+    html += "Broker Host: <input name='mqttHost' value='";
+    html += g_mqttConfig.host.length() > 0 ? g_mqttConfig.host : String(MQTT_BROKER_HOST);
+    html += "'><br>";
+    html += "Broker Port: <input name='mqttPort' value='";
+    html += String(g_mqttConfig.port != 0 ? g_mqttConfig.port : MQTT_BROKER_PORT);
+    html += "'><br>";
+    html += "用户名: <input name='mqttUser' value='";
+    html += g_mqttConfig.username;
+    html += "'><br>";
+    html += "密码: <input name='mqttPwd' type='password' value='";
+    html += g_mqttConfig.password;
+    html += "'><br>";
+    html += "Topic 前缀: <input name='mqttPrefix' value='";
+    html += g_mqttConfig.topicPrefix.length() > 0 ? g_mqttConfig.topicPrefix : String(MQTT_TOPIC_PREFIX);
+    html += "'><br>";
+    html += "Site ID: <input name='mqttSite' value='";
+    html += g_mqttConfig.siteId.length() > 0 ? g_mqttConfig.siteId : String(MQTT_SITE_ID);
+    html += "'><br>";
+    html += "Gateway ID: <input name='mqttGateway' value='";
+    html += g_mqttConfig.gatewayId.length() > 0 ? g_mqttConfig.gatewayId : String(MQTT_GATEWAY_ID);
+    html += "'><br>";
+    html += "<button type='submit'>保存并重启</button>";
+    html += "</form>";
+    html += "</body></html>";
+    g_httpServer.send(200, "text/html; charset=utf-8", html);
+}
+
+static void handleHttpConfig() {
+    String wifiSsid = g_httpServer.arg("wifiSsid");
+    String wifiPwd = g_httpServer.arg("wifiPwd");
+    String mqttHost = g_httpServer.arg("mqttHost");
+    String mqttPortStr = g_httpServer.arg("mqttPort");
+    String mqttUser = g_httpServer.arg("mqttUser");
+    String mqttPwd = g_httpServer.arg("mqttPwd");
+    String mqttPrefix = g_httpServer.arg("mqttPrefix");
+    String mqttSite = g_httpServer.arg("mqttSite");
+    String mqttGateway = g_httpServer.arg("mqttGateway");
+
+    g_prefs.begin("anyport", false);
+
+    if (wifiSsid.length() > 0) {
+        g_prefs.putString("wifiSsid", wifiSsid);
+        g_prefs.putString("wifiPwd", wifiPwd);
+        g_wifiStaConfig.valid = true;
+        g_wifiStaConfig.ssid = wifiSsid;
+        g_wifiStaConfig.password = wifiPwd;
     }
 
-    if (doc.containsKey("eth")) {
-        JsonObject eth = doc["eth"].as<JsonObject>();
-
-        EthStaticConfig newCfg = {};
-        newCfg.valid = true;
-
-        const char* ipStr   = eth["ip"]   | "";
-        const char* maskStr = eth["mask"] | "";
-        const char* gwStr   = eth["gateway"] | "0.0.0.0";
-        const char* dnsStr  = eth["dns"] | "0.0.0.0";
-
-        if (parseIpAddress(ipStr, newCfg.ip) && parseIpAddress(maskStr, newCfg.subnet)) {
-            parseIpAddress(gwStr, newCfg.gateway);
-            parseIpAddress(dnsStr, newCfg.dns);
-            g_ethConfig = newCfg;
-            applyEthConfig();
-            needSave = true;
+    if (mqttHost.length() > 0) {
+        uint16_t mqttPort = static_cast<uint16_t>(mqttPortStr.toInt());
+        if (mqttPort == 0) {
+            mqttPort = MQTT_BROKER_PORT;
         }
+        g_prefs.putString("mqttHost", mqttHost);
+        g_prefs.putUShort("mqttPort", mqttPort);
+        g_prefs.putString("mqttUser", mqttUser);
+        g_prefs.putString("mqttPwd", mqttPwd);
+        g_prefs.putString("mqttPrefix", mqttPrefix);
+        g_prefs.putString("mqttSite", mqttSite);
+        g_prefs.putString("mqttGateway", mqttGateway);
+
+        g_mqttConfig.host = mqttHost;
+        g_mqttConfig.port = mqttPort;
+        g_mqttConfig.username = mqttUser;
+        g_mqttConfig.password = mqttPwd;
+        g_mqttConfig.topicPrefix = mqttPrefix;
+        g_mqttConfig.siteId = mqttSite;
+        g_mqttConfig.gatewayId = mqttGateway;
+        g_mqttConfig.valid = true;
     }
 
-    if (doc.containsKey("wifi")) {
-        JsonObject wifi = doc["wifi"].as<JsonObject>();
-        const char* ssid = wifi["ssid"] | "";
-        const char* pwd  = wifi["password"] | "";
+    g_prefs.end();
 
-        if (strlen(ssid) > 0) {
-            g_wifiStaConfig.valid = true;
-            g_wifiStaConfig.ssid = ssid;
-            g_wifiStaConfig.password = pwd;
-            needSave = true;
-            g_needRestart = true;
-        }
+    g_needRestart = true;
+
+    g_httpServer.send(200, "text/html; charset=utf-8", "<html><body><h1>配置已保存，设备即将重启</h1></body></html>");
+}
+
+static void handleMqttRequestMessage(const String& topic, const uint8_t* payload, unsigned int length) {
+    String sessionId;
+    int idx = topic.lastIndexOf('/');
+    if (idx >= 0 && idx + 1 < static_cast<int>(topic.length())) {
+        sessionId = topic.substring(idx + 1);
     }
 
-    if (needSave) {
-        g_prefs.begin("anyport", false);
-        g_prefs.putUShort("wsPort", g_wsPort);
-
-        if (g_ethConfig.valid) {
-            g_prefs.putUInt("ethIp",   static_cast<uint32_t>(g_ethConfig.ip));
-            g_prefs.putUInt("ethMask", static_cast<uint32_t>(g_ethConfig.subnet));
-            g_prefs.putUInt("ethGw",   static_cast<uint32_t>(g_ethConfig.gateway));
-            g_prefs.putUInt("ethDns",  static_cast<uint32_t>(g_ethConfig.dns));
-        }
-
-        if (g_wifiStaConfig.valid) {
-            g_prefs.putString("wifiSsid", g_wifiStaConfig.ssid);
-            g_prefs.putString("wifiPwd",  g_wifiStaConfig.password);
-        }
-
-        g_prefs.end();
+    DynamicJsonDocument doc(MQTT_JSON_DOC_SIZE);
+    DeserializationError err = deserializeJson(doc, payload, length);
+    if (err != DeserializationError::Ok) {
+        StaticJsonDocument<256> resp;
+        resp["sessionId"] = sessionId;
+        resp["success"] = false;
+        resp["error"] = String("json_error:") + err.c_str();
+        String out;
+        serializeJson(resp, out);
+        String respTopic = buildMqttResponseTopic(sessionId);
+        g_mqttClient.publish(respTopic.c_str(), out.c_str(), false);
+        return;
     }
+
+    const char* transport = doc["transport"] | "";
+    const char* payloadHex = doc["payloadHex"] | "";
+
+    if (!transport[0] || !payloadHex[0]) {
+        StaticJsonDocument<256> resp;
+        resp["sessionId"] = sessionId;
+        resp["success"] = false;
+        resp["error"] = "missing_transport_or_payloadHex";
+        String out;
+        serializeJson(resp, out);
+        String respTopic = buildMqttResponseTopic(sessionId);
+        g_mqttClient.publish(respTopic.c_str(), out.c_str(), false);
+        return;
+    }
+
+    doc["hex"] = payloadHex;
+
+    DynamicJsonDocument modbusResp(512);
+    bool ok = false;
+
+    if (strcmp(transport, "tcp") == 0) {
+        ok = modbusTcpForward(doc, modbusResp);
+    } else if (strcmp(transport, "rtu") == 0) {
+        ok = modbusRtuForward(doc, modbusResp);
+    } else {
+        StaticJsonDocument<256> resp;
+        resp["sessionId"] = sessionId;
+        resp["success"] = false;
+        resp["error"] = "unsupported_transport";
+        String out;
+        serializeJson(resp, out);
+        String respTopic = buildMqttResponseTopic(sessionId);
+        g_mqttClient.publish(respTopic.c_str(), out.c_str(), false);
+        return;
+    }
+
+    StaticJsonDocument<512> resp;
+    resp["sessionId"] = sessionId;
+    resp["success"] = ok;
+
+    if (ok) {
+        const char* outHex = modbusResp["hex"] | "";
+        resp["payloadHex"] = outHex;
+    } else {
+        const char* msg = modbusResp["message"] | "modbus_forward_failed";
+        resp["error"] = msg;
+    }
+
+    String out;
+    serializeJson(resp, out);
+    String respTopic = buildMqttResponseTopic(sessionId);
+    g_mqttClient.publish(respTopic.c_str(), out.c_str(), false);
 }
 
 static bool parseIpAddress(const char* str, IPAddress& outIp) {
@@ -496,7 +947,38 @@ static String bytesToHexString(const uint8_t* data, size_t length) {
     return result;
 }
 
-static bool modbusTcpForward(const JsonDocument& doc, JsonDocument& resp) {
+static bool buildRs485Config(
+    uint32_t requestedBaud,
+    uint8_t stopBits,
+    const char* parityStr,
+    uint32_t& baudOut,
+    uint32_t& configOut
+) {
+    if (requestedBaud < 1200 || requestedBaud > 1152000) {
+        return false;
+    }
+    if (stopBits != 1 && stopBits != 2) {
+        return false;
+    }
+
+    uint32_t config = 0;
+
+    if (strcmp(parityStr, "none") == 0) {
+        config = (stopBits == 1) ? SERIAL_8N1 : SERIAL_8N2;
+    } else if (strcmp(parityStr, "even") == 0) {
+        config = (stopBits == 1) ? SERIAL_8E1 : SERIAL_8E2;
+    } else if (strcmp(parityStr, "odd") == 0) {
+        config = (stopBits == 1) ? SERIAL_8O1 : SERIAL_8O2;
+    } else {
+        return false;
+    }
+
+    baudOut = requestedBaud;
+    configOut = config;
+    return true;
+}
+
+static bool modbusTcpForward(JsonDocument& doc, JsonDocument& resp) {
     if (!doc.containsKey("tcpTarget") || !doc.containsKey("hex")) {
         resp["message"] = "missing_tcp_target_or_hex";
         return false;
@@ -563,34 +1045,50 @@ static bool modbusTcpForward(const JsonDocument& doc, JsonDocument& resp) {
     return true;
 }
 
-static bool modbusRtuForward(const JsonDocument& doc, JsonDocument& resp) {
+static bool modbusRtuForward(JsonDocument& doc, JsonDocument& resp) {
     if (!doc.containsKey("hex")) {
         resp["message"] = "missing_hex";
         return false;
     }
 
+    uint32_t requestedBaud = RS485_DEFAULT_BAUDRATE;
+    uint8_t stopBits = RS485_DEFAULT_STOPBITS;
+    const char* parityStr = "none";
+
     if (doc.containsKey("rtuTarget")) {
         JsonObject rtu = doc["rtuTarget"].as<JsonObject>();
-        uint32_t baud = rtu["baudRate"] | RS485_DEFAULT_BAUDRATE;
-        uint8_t  stopBits = rtu["stopBits"] | RS485_DEFAULT_STOPBITS;
-        const char* parityStr = rtu["parity"] | "none";
+        requestedBaud = rtu["baudRate"] | RS485_DEFAULT_BAUDRATE;
+        stopBits = rtu["stopBits"] | RS485_DEFAULT_STOPBITS;
+        parityStr = rtu["parity"] | "none";
+    }
 
-        uint32_t config = SERIAL_8N1;
-        if (strcmp(parityStr, "even") == 0) {
-            config = SERIAL_8E1;
-        } else if (strcmp(parityStr, "odd") == 0) {
-            config = SERIAL_8O1;
-        }
+    uint32_t baud = 0;
+    uint32_t config = 0;
+    if (!buildRs485Config(requestedBaud, stopBits, parityStr, baud, config)) {
+        resp["message"] = "invalid_rtu_config";
+        return false;
+    }
 
-        RS485Serial.updateBaudRate(baud);
-        (void)stopBits;
-        (void)config;
+    if (g_rs485Busy) {
+        resp["message"] = "rtu_busy";
+        return false;
+    }
+    g_rs485Busy = true;
+
+    if (baud != g_rs485CurrentBaud || config != g_rs485CurrentConfig) {
+        RS485Serial.flush();
+        RS485Serial.end();
+        delay(2);
+        RS485Serial.begin(baud, config, PIN_RS485_RX, PIN_RS485_TX);
+        g_rs485CurrentBaud = baud;
+        g_rs485CurrentConfig = config;
     }
 
     const char* hex = doc["hex"] | "";
     size_t length = 0;
     if (!hexStringToBytes(hex, g_rtuRxBuffer, sizeof(g_rtuRxBuffer), length)) {
         resp["message"] = "invalid_hex";
+        g_rs485Busy = false;
         return false;
     }
 
@@ -622,10 +1120,56 @@ static bool modbusRtuForward(const JsonDocument& doc, JsonDocument& resp) {
 
     if (g_rtuRxLength == 0) {
         resp["message"] = "rtu_timeout_or_empty";
+        g_rs485Busy = false;
         return false;
     }
 
     resp["hex"] = bytesToHexString(g_rtuRxBuffer, g_rtuRxLength);
     resp["length"] = static_cast<uint32_t>(g_rtuRxLength);
+    g_rs485Busy = false;
     return true;
+}
+
+// 构建完整状态 JSON 字符串（上线消息 + 心跳共用）
+// 包含：status, version, 串口参数, W5500 IP, WiFi IP
+static String buildStatusPayload() {
+    StaticJsonDocument<384> doc;
+    doc["status"]  = "online";
+    doc["version"] = FIRMWARE_VERSION;
+
+    // RS485 串口参数
+    doc["baud"] = (uint32_t)g_rs485CurrentBaud;
+    if (g_rs485CurrentConfig == SERIAL_8N1) {
+        doc["parity"]   = "none";
+        doc["stopBits"] = 1;
+    } else if (g_rs485CurrentConfig == SERIAL_8E1) {
+        doc["parity"]   = "even";
+        doc["stopBits"] = 1;
+    } else if (g_rs485CurrentConfig == SERIAL_8O1) {
+        doc["parity"]   = "odd";
+        doc["stopBits"] = 1;
+    } else if (g_rs485CurrentConfig == SERIAL_8N2) {
+        doc["parity"]   = "none";
+        doc["stopBits"] = 2;
+    } else {
+        doc["parity"]   = "none";
+        doc["stopBits"] = 1;
+    }
+
+    // W5500 以太网 IP（TCP 模式目标设备通过此网口通信）
+    IPAddress ethIp = ::Ethernet.localIP();
+    if (ethIp != IPAddress(0, 0, 0, 0)) {
+        doc["ethIp"] = ethIp.toString();
+    }
+
+    // WiFi IP（MQTT 连接走此接口）
+    if (WiFi.status() == WL_CONNECTED) {
+        doc["wifiIp"] = WiFi.localIP().toString();
+    } else if (WiFi.getMode() == WIFI_AP || WiFi.getMode() == WIFI_AP_STA) {
+        doc["wifiIp"] = WiFi.softAPIP().toString();
+    }
+
+    String out;
+    serializeJson(doc, out);
+    return out;
 }
