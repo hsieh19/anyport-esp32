@@ -9,13 +9,9 @@
  *   - RS485: UART + RS485 收发器（自带自动方向控制，无需 DE/RE 引脚）
  *
  * 设计目标：
- *   - 在 AnyPort 前端的 “WiFi 网关” 模式下，浏览器通过 WebSocket 连接到 ESP32 网关；
  *   - 当前端选择 Modbus TCP 时，ESP32 通过 W5500 建立 TCP 连接转发报文；
  *   - 当前端选择 Modbus RTU 时，ESP32 通过 RS485 接口转发报文。
  *
- * 约束：
- *   - 必须包含完整的初始化逻辑，不使用 TODO 省略；
- *   - 必须给出详细的引脚定义说明，方便在不同 ESP32-C3 开发板上迁移。
  */
 
 #include <Arduino.h>
@@ -25,8 +21,7 @@
 #include <Preferences.h>
 #include <time.h>
 #include <WiFiClientSecure.h>
-#include <WebSocketsClient.h>
-#include <MQTT.h> // arduino-mqtt (LWMQTT)
+#include <MQTT.h>
 #include <ArduinoJson.h>
 #include <WebServer.h>
 
@@ -102,7 +97,7 @@ static constexpr const char* WIFI_AP_PASSWORD = "12345678"; // WPA2 要求最少
 
 static constexpr const char* MQTT_BROKER_HOST   = "anyport.example.com"; // 默认域名
 static const uint16_t        MQTT_BROKER_PORT   = 443;
-static constexpr const char* MQTT_BROKER_PATH   = "/mqtt";
+static constexpr const char* MQTT_BROKER_PATH   = "/"; // 默认改为根路径
 static constexpr const char* MQTT_USERNAME      = "";
 static constexpr const char* MQTT_PASSWORD      = "";
 static constexpr const char* MQTT_TOPIC_PREFIX  = "anyport";
@@ -147,76 +142,11 @@ static Preferences g_prefs;
 static EthernetClient g_ethClient;
 
 // -----------------------
-// 2. WSS/MQTT 桥接器与全局对象
+// 2. MQTT/TLS 客户端全局对象
 // -----------------------
-
-// WebSocket 桥接类，将 WebSocketsClient 包装为 arduino::Client 接口供 MQTT 库使用
-class WebSocketClientWrapper : public Client {
-private:
-    WebSocketsClient* _ws;
-    uint8_t* _buffer;
-    size_t _capacity;
-    size_t _head = 0;
-    size_t _tail = 0;
-    bool _connected = false;
-
-public:
-    WebSocketClientWrapper(size_t capacity = 2048) : _ws(nullptr), _capacity(capacity) {
-        _buffer = (uint8_t*)malloc(_capacity);
-    }
-    
-    void setWebSocket(WebSocketsClient* ws) { _ws = ws; }
-    
-    void onData(uint8_t* payload, size_t length) {
-        for (size_t i = 0; i < length; i++) {
-            size_t next = (_tail + 1) % _capacity;
-            if (next != _head) {
-                _buffer[_tail] = payload[i];
-                _tail = next;
-            }
-        }
-    }
-
-    int connect(IPAddress ip, uint16_t port) override { return (_ws && _ws->isConnected()) ? 1 : 0; }
-    int connect(const char* host, uint16_t port) override { return (_ws && _ws->isConnected()) ? 1 : 0; }
-    
-    size_t write(uint8_t b) override { return write(&b, 1); }
-    size_t write(const uint8_t* buf, size_t size) override {
-        if (_ws && _ws->isConnected()) {
-            return _ws->sendBIN(buf, size) ? size : 0;
-        }
-        return 0;
-    }
-
-    int available() override { return (_tail + _capacity - _head) % _capacity; }
-    int read() override {
-        if (_head == _tail) return -1;
-        uint8_t b = _buffer[_head];
-        _head = (_head + 1) % _capacity;
-        return b;
-    }
-
-    int read(uint8_t *buf, size_t size) override {
-        if (_head == _tail) return -1;
-        size_t count = 0;
-        while (count < size && _head != _tail) {
-            buf[count++] = _buffer[_head];
-            _head = (_head + 1) % _capacity;
-        }
-        return count;
-    }
-    int peek() override { return (_head == _tail) ? -1 : _buffer[_head]; }
-    void flush() override {}
-    void stop() override { if (_ws) _ws->disconnect(); }
-    uint8_t connected() override { return (_ws && _ws->isConnected()) ? 1 : 0; }
-    operator bool() override { return connected() != 0; }
-};
-
-static WebSocketClientWrapper g_mqttTransport(2048);
-static WebSocketsClient g_wsClient;
-static MQTTClient g_mqttClient(2048); // 增加缓冲区以容纳较大 JSON
+static WiFiClientSecure g_mqttNetClient;
+static MQTTClient g_mqttClient(2048);
 static unsigned long g_lastMqttReconnectAttempt = 0;
-static bool g_isWssHandshaking = false;
 
 struct MqttRuntimeConfig {
     bool     valid;
@@ -289,13 +219,10 @@ static void initMqttClient();
 static void mqttLoop();
 static bool ensureMqttConnected();
 static void mqttMessageReceived(String &topic, String &payload);
-static void webSocketEvent(WStype_t type, uint8_t * payload, size_t length);
 static String buildMqttStatusTopic();
 static String buildMqttRequestFilter();
 static String buildMqttResponseTopic(const String& sessionId);
-static String buildMqttConfigTopic();
 static void handleMqttRequestMessage(const String& topic, const uint8_t* payload, unsigned int length);
-static void handleMqttConfigMessage(const String& topic, const uint8_t* payload, unsigned int length);
 static void initHttpServer();
 static void httpLoop();
 static void handleHttpRoot();
@@ -523,6 +450,33 @@ static void loadPersistentConfig() {
         g_ntpConfig.valid = true;
     }
 
+    // MQTT 配置加载逻辑
+    if (g_prefs.isKey("mqttHost")) {
+        g_mqttConfig.host = g_prefs.getString("mqttHost", MQTT_BROKER_HOST);
+        g_mqttConfig.port = g_prefs.getUShort("mqttPort", MQTT_BROKER_PORT);
+        g_mqttConfig.path = g_prefs.getString("mqttPath", MQTT_BROKER_PATH);
+        g_mqttConfig.username = g_prefs.getString("mqttUser", MQTT_USERNAME);
+        g_mqttConfig.password = g_prefs.getString("mqttPwd", MQTT_PASSWORD);
+        g_mqttConfig.topicPrefix = g_prefs.getString("mqttPrefix", MQTT_TOPIC_PREFIX);
+        g_mqttConfig.siteId = g_prefs.getString("mqttSite", MQTT_SITE_ID);
+        g_mqttConfig.gatewayId = g_prefs.getString("mqttGateway", MQTT_GATEWAY_ID);
+        g_mqttConfig.valid = true;
+        
+        Serial.println("[Init] MQTT config loaded from NVS");
+        Serial.print("  Host: "); Serial.println(g_mqttConfig.host);
+        Serial.print("  Path: "); Serial.println(g_mqttConfig.path);
+    } else {
+        Serial.println("[Init] No MQTT config in NVS, using defaults");
+        g_mqttConfig.host = MQTT_BROKER_HOST;
+        g_mqttConfig.port = MQTT_BROKER_PORT;
+        g_mqttConfig.path = MQTT_BROKER_PATH;
+        g_mqttConfig.username = MQTT_USERNAME;
+        g_mqttConfig.password = MQTT_PASSWORD;
+        g_mqttConfig.topicPrefix = MQTT_TOPIC_PREFIX;
+        g_mqttConfig.siteId = MQTT_SITE_ID;
+        g_mqttConfig.gatewayId = MQTT_GATEWAY_ID;
+        g_mqttConfig.valid = true;
+    }
     g_prefs.end();
 }
 
@@ -622,55 +576,15 @@ static String buildMqttResponseTopic(const String& sessionId) {
     return topic;
 }
 
-static String buildMqttConfigTopic() {
-    String prefix = g_mqttConfig.topicPrefix.length() > 0 ? g_mqttConfig.topicPrefix : String(MQTT_TOPIC_PREFIX);
-    String site = g_mqttConfig.siteId.length() > 0 ? g_mqttConfig.siteId : String(MQTT_SITE_ID);
-    String gateway = g_mqttConfig.gatewayId.length() > 0 ? g_mqttConfig.gatewayId : String(MQTT_GATEWAY_ID);
-
-    String topic = prefix;
-    topic += "/";
-    topic += site;
-    topic += "/";
-    topic += gateway;
-    topic += "/config";
-    return topic;
-}
-
-static void webSocketEvent(WStype_t type, uint8_t * payload, size_t length) {
-    switch(type) {
-        case WStype_DISCONNECTED:
-            Serial.println("[WSS] Disconnected");
-            g_isWssHandshaking = false;
-            break;
-        case WStype_CONNECTED:
-            Serial.printf("[WSS] Connected to: %s\n", (char *)payload);
-            g_isWssHandshaking = false;
-            break;
-        case WStype_TEXT:
-        case WStype_BIN:
-            g_mqttTransport.onData(payload, length);
-            break;
-        case WStype_PONG:
-            break;
-        default:
-            break;
-    }
-}
-
 static void mqttMessageReceived(String &topic, String &payload) {
-    if (topic.endsWith("/config")) {
-        handleMqttConfigMessage(topic, (const uint8_t*)payload.c_str(), payload.length());
-    } else {
-        handleMqttRequestMessage(topic, (const uint8_t*)payload.c_str(), payload.length());
-    }
+    handleMqttRequestMessage(topic, (const uint8_t*)payload.c_str(), payload.length());
 }
 
 static void initMqttClient() {
-    g_wsClient.onEvent(webSocketEvent);
-    g_wsClient.setReconnectInterval(5000);
-    
-    g_mqttTransport.setWebSocket(&g_wsClient);
-    g_mqttClient.begin(g_mqttTransport);
+    String host = g_mqttConfig.host.length() > 0 ? g_mqttConfig.host : String(MQTT_BROKER_HOST);
+    uint16_t port = g_mqttConfig.port != 0 ? g_mqttConfig.port : MQTT_BROKER_PORT;
+    g_mqttNetClient.setInsecure();
+    g_mqttClient.begin(host.c_str(), port, g_mqttNetClient);
     g_mqttClient.onMessage(mqttMessageReceived);
 }
 
@@ -689,24 +603,6 @@ static bool ensureMqttConnected() {
     }
     g_lastMqttReconnectAttempt = now;
 
-    // Step 1: WebSocket 层确保连接
-    if (!g_wsClient.isConnected()) {
-        String host = g_mqttConfig.host.length() > 0 ? g_mqttConfig.host : String(MQTT_BROKER_HOST);
-        uint16_t port = g_mqttConfig.port != 0 ? g_mqttConfig.port : MQTT_BROKER_PORT;
-        String path = g_mqttConfig.path.length() > 0 ? g_mqttConfig.path : String(MQTT_BROKER_PATH);
-        
-        Serial.print("[WSS] Handshaking with wss://");
-        Serial.print(host);
-        Serial.print(":");
-        Serial.print(port);
-        Serial.println(path);
-        
-        g_isWssHandshaking = true;
-        g_wsClient.beginSSL(host.c_str(), port, path.c_str());
-        return false; // 等待下一轮循环 WS 就绪
-    }
-
-    // Step 2: MQTT 层确保连接
     String clientId = "anyport-esp32-";
     clientId += String((uint32_t)ESP.getEfuseMac(), HEX);
     String statusTopic = buildMqttStatusTopic();
@@ -719,8 +615,10 @@ static bool ensureMqttConnected() {
 
     g_mqttClient.setWill(statusTopic.c_str(), willPayload.c_str(), true, 1);
 
-    Serial.print("[MQTT] Connecting to WSS bridge as ");
+    Serial.print("[MQTT] Connecting to broker as ");
     Serial.println(clientId);
+
+    g_mqttClient.setOptions(60, true, 5000);
 
     bool ok = false;
     if (g_mqttConfig.username.length() > 0) {
@@ -730,7 +628,10 @@ static bool ensureMqttConnected() {
     }
 
     if (!ok) {
-        Serial.println("[MQTT] Connect FAILED");
+        Serial.print("[MQTT] Connect FAILED, lastError=");
+        Serial.print((int)g_mqttClient.lastError());
+        Serial.print(" returnCode=");
+        Serial.println((int)g_mqttClient.returnCode());
         return false;
     }
 
@@ -741,13 +642,11 @@ static bool ensureMqttConnected() {
     g_lastHeartbeatMs = millis(); 
 
     g_mqttClient.subscribe(buildMqttRequestFilter().c_str(), 1);
-    g_mqttClient.subscribe(buildMqttConfigTopic().c_str(), 1);
 
     return true;
 }
 
 static void mqttLoop() {
-    g_wsClient.loop();
     if (ensureMqttConnected()) {
         g_mqttClient.loop();
     }
@@ -755,62 +654,7 @@ static void mqttLoop() {
 
 static void mqttCallback(char* topic, byte* payload, unsigned int length) {
     String t(topic);
-    if (t.endsWith("/config")) {
-        handleMqttConfigMessage(t, payload, length);
-    } else {
-        handleMqttRequestMessage(t, payload, length);
-    }
-}
-
-static void handleMqttConfigMessage(const String& topic, const uint8_t* payload, unsigned int length) {
-    (void)topic;
-
-    DynamicJsonDocument doc(512);
-    DeserializationError err = deserializeJson(doc, payload, length);
-    if (err != DeserializationError::Ok) {
-        return;
-    }
-
-    JsonVariant mqtt = doc["mqtt"];
-    if (mqtt.isNull() || !mqtt.is<JsonObject>()) {
-        return;
-    }
-
-    const char* host = mqtt["host"] | "";
-    uint16_t port = mqtt["port"] | MQTT_BROKER_PORT;
-    const char* path = mqtt["path"] | "/mqtt";
-    const char* username = mqtt["username"] | "";
-    const char* password = mqtt["password"] | "";
-    const char* prefix = mqtt["topicPrefix"] | "";
-    const char* site = mqtt["siteId"] | "";
-    const char* gateway = mqtt["gatewayId"] | "";
-
-    if (!host[0]) {
-        return;
-    }
-
-    g_prefs.begin("anyport", false);
-    g_prefs.putString("mqttHost", host);
-    g_prefs.putUShort("mqttPort", port);
-    g_prefs.putString("mqttPath", path);
-    g_prefs.putString("mqttUser", username);
-    g_prefs.putString("mqttPwd", password);
-    g_prefs.putString("mqttPrefix", prefix);
-    g_prefs.putString("mqttSite", site);
-    g_prefs.putString("mqttGateway", gateway);
-    g_prefs.end();
-
-    g_mqttConfig.host = host;
-    g_mqttConfig.port = port;
-    g_mqttConfig.path = path;
-    g_mqttConfig.username = username;
-    g_mqttConfig.password = password;
-    g_mqttConfig.topicPrefix = prefix;
-    g_mqttConfig.siteId = site;
-    g_mqttConfig.gatewayId = gateway;
-    g_mqttConfig.valid = true;
-
-    g_needRestart = true;
+    handleMqttRequestMessage(t, payload, length);
 }
 
 static void initHttpServer() {
@@ -820,11 +664,6 @@ static void initHttpServer() {
 }
 
 static void httpLoop() {
-    // 如果处于 WSS 握手阶段，降低 HTTP 处理频率以减少 CPU 负载
-    if (g_isWssHandshaking) {
-        static uint32_t httpSkip = 0;
-        if (++httpSkip % 10 != 0) return;
-    }
     g_httpServer.handleClient();
 }
 
@@ -908,9 +747,13 @@ static void handleHttpConfig() {
         if (mqttPort == 0) {
             mqttPort = MQTT_BROKER_PORT;
         }
+        
+        // 如果网页提交的 path 为空，则存为一个 / ，保证格式合法，或者直接允许为空
+        String finalPath = mqttPath.length() > 0 ? mqttPath : "/";
+        
         g_prefs.putString("mqttHost", mqttHost);
         g_prefs.putUShort("mqttPort", mqttPort);
-        g_prefs.putString("mqttPath", mqttPath);
+        g_prefs.putString("mqttPath", finalPath);
         g_prefs.putString("mqttUser", mqttUser);
         g_prefs.putString("mqttPwd", mqttPwd);
         g_prefs.putString("mqttPrefix", mqttPrefix);
@@ -919,7 +762,7 @@ static void handleHttpConfig() {
 
         g_mqttConfig.host = mqttHost;
         g_mqttConfig.port = mqttPort;
-        g_mqttConfig.path = mqttPath;
+        g_mqttConfig.path = finalPath;
         g_mqttConfig.username = mqttUser;
         g_mqttConfig.password = mqttPwd;
         g_mqttConfig.topicPrefix = mqttPrefix;
