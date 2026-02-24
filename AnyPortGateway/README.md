@@ -35,9 +35,7 @@
    - 用途：解析与构造 WebSocket 收发的 JSON 消息（配置、Modbus 请求/响应）。
    - 建议安装：`ArduinoJson`（作者 Benoit Blanchon）。
 
-3. **arduinoWebSockets**
-   - 用途：实现 WebSocket 服务器（`WebSocketsServer`），供 AnyPort 前端连接。
-   - 建议安装：`arduinoWebSockets`（作者 Markus Sattler）。
+3. **MQTT**\r\n   - 用途：实现 MQTT 客户端，连接 Broker 与前端进行双向通讯。\r\n   - 建议安装：`MQTT`（作者 Joel Gaehwiler）。
 
 4. **ESP32 Core 自带库**
    - 这些库在安装 ESP32 核心后自动提供，无需单独安装：
@@ -54,7 +52,7 @@
 - `AnyPortGateway.ino`
   - 标准 Arduino 入口，调用：
     - `anyportHardwareInit()`：硬件初始化。
-    - `anyportGatewayLoop()`：网关主循环（WebSocket + Modbus 转发）。
+    - `anyportGatewayLoop()`：网关主循环（MQTT 处理 + 定期心跳 + Modbus 转发）。
 
 - `Config.h`
   - 含完整的：
@@ -64,13 +62,7 @@
     - WiFi STA + AP 逻辑：
       - 优先使用 STA 连接路由器；
       - 失败时自动启用 AP，方便手机/PC 配置；
-    - 配置存储（Preferences）：
-      - WebSocket 端口；
-      - W5500 静态 IP/子网掩码/网关/DNS；
-      - WiFi STA SSID/密码；
-    - WebSocket 服务器：
-      - `type: "config"`：接收前端下发的配置；
-      - `transport: "tcp"|"rtu"`：处理 Modbus TCP/RTU 请求；
+    - 配置存储（Preferences）：\r\n      - MQTT Broker 地址/端口/路径/鉴权信息；\r\n      - W5500 静态 IP/子网掩码/网关/DNS；\r\n      - WiFi STA SSID/密码；\r\n    - MQTT 通讯：\r\n      - `topic/request`：接收来自前端的 Modbus 请求或配置指令；\r\n      - `topic/response`：回传 Modbus 结果或操作状态；\r\n      - `topic/status`：发布网关在线状态与硬件信息（心跳）；
     - Modbus TCP 转发（通过 W5500 → 现场设备）；
     - Modbus RTU 转发（通过 RS485 → 现场设备）。
 
@@ -140,7 +132,7 @@ UART 使用 **UART1**，引脚分配如下：
 4. 点击 “验证/编译”，确认无错误后点击 “上传”，完成烧录。  
 5. 上电后：
    - 如已配置 WiFi STA：设备将尝试连接路由器；  
-   - 如未配置或连接失败：设备会开启 AP `AnyPort-Gateway`，密码 `AnyPort1234`，可通过 AnyPort 前端或自制工具连接并下发配置。
+   - 如未配置或连接失败：设备会开启 AP `anyport`，密码 `12345678`，可通过浏览器访问 `192.168.4.1` 进行 Web 网页配置。
 
 后续如需修改引脚或串口参数，请优先修改 `Config.h` 中的对应定义，并保持文档与实际硬件一致。
 
