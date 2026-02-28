@@ -132,7 +132,7 @@ static const uint8_t RS485_DEFAULT_PARITY =
 
 // W5500 Ethernet 使用 Arduino Ethernet 库
 // 注意：Ethernet 库会使用 SPI 全局实例，因此需在初始化函数中先配置 SPI 引脚。
-static byte g_macAddress[6] = {0x02, 0x00, 0x00, 0x00, 0xC3, 0x01};
+static uint8_t g_macAddress[6];
 
 // RS485 使用 UART1
 static HardwareSerial RS485Serial(1);
@@ -242,6 +242,8 @@ static bool modbusTcpForward(JsonDocument &doc, JsonDocument &resp);
 static bool modbusRtuForward(JsonDocument &doc, JsonDocument &resp);
 static String buildStatusPayload(); // 构建完整状态 JSON
 static void syncNtpTime();          // NTP 对时逻辑
+static void pingForward(JsonDocument &doc,
+                        const String &sessionId); // TCP Ping 探测
 
 // -----------------------
 // 4. 硬件初始化函数实现
@@ -393,7 +395,14 @@ static void initWifi() {
 
 static void initSpiAndEthernet() {
   // 配置 SPI 引脚并初始化 SPI 总线
-  SPI.begin(PIN_W5500_SCK, PIN_W5500_MISO, PIN_W5500_MOSI, PIN_W5500_CS);
+  // [关键修复]：这里必须将 CS 引脚传 -1！
+  // 因为 Ethernet 库内部是通过普通的 digitalWrite 来拉低/拉高 CS 的。
+  // 如果在 SPI.begin() 中传入了 CS 引脚，ESP32 底层硬件 SPI
+  // 就会“劫持”这个引脚， 导致 Ethernet 库的 digitalWrite 操作完全无效，从而读出
+  // 0。
+  pinMode(PIN_W5500_CS, OUTPUT);
+  digitalWrite(PIN_W5500_CS, HIGH);
+  SPI.begin(PIN_W5500_SCK, PIN_W5500_MISO, PIN_W5500_MOSI, -1);
 
   // 对 W5500 执行硬件复位
   digitalWrite(PIN_W5500_RST, LOW);
@@ -403,17 +412,15 @@ static void initSpiAndEthernet() {
 
   Ethernet.init(static_cast<uint8_t>(PIN_W5500_CS));
 
-  // 检测 W5500 是否存在：读取版本寄存器（应为 0x04）
-  // 没有接 W5500 时跳过以太网初始化，避免卡死
-  uint8_t ver = Ethernet.hardwareStatus();
-  Serial.print("[Init] W5500 hardware status: ");
-  Serial.println(ver);
-  if (ver == EthernetNoHardware) {
-    Serial.println("[Init] W5500 not found, skip Ethernet init");
-    return;
-  }
-
+  // 必须先调用 applyEthConfig() 里的 Ethernet.begin()，
+  // 然后 Ethernet 库底层才会去初始化 W5500 并让 hardwareStatus()
+  // 生效，否则永远是0！
   applyEthConfig();
+
+  // 检测 W5500 是否存在：读取版本寄存器（应为 0x04）
+  uint8_t ver = Ethernet.hardwareStatus();
+  Serial.print("[Init] Ethernet lib hardware status: ");
+  Serial.println(ver);
 }
 
 static void loadPersistentConfig() {
@@ -484,12 +491,21 @@ static void loadPersistentConfig() {
 }
 
 static void applyEthConfig() {
-  if (g_ethConfig.valid) {
-    Ethernet.begin(g_macAddress, g_ethConfig.ip, g_ethConfig.dns,
-                   g_ethConfig.gateway, g_ethConfig.subnet);
-  } else {
-    Ethernet.begin(g_macAddress);
+  if (!g_ethConfig.valid) {
+    Serial.println("[ETH] No config, skip");
+    return;
   }
+
+  // 获取 ESP32 的基准 MAC 地址，并将首字节第二位置 1 （Locally Administered
+  // MAC） 以保证网络中 MAC 是唯一的，防止与局域网内其他设备或默认 W5500 MAC
+  // 冲突导致 ARP 丢失
+  WiFi.macAddress(g_macAddress);
+  g_macAddress[0] = (g_macAddress[0] & 0xFC) | 0x02;
+
+  Ethernet.begin(g_macAddress, g_ethConfig.ip, g_ethConfig.dns,
+                 g_ethConfig.gateway, g_ethConfig.subnet);
+  Serial.print("[ETH] IP=");
+  Serial.println(Ethernet.localIP());
 }
 
 static void syncNtpTime() {
@@ -874,6 +890,13 @@ static void handleMqttRequestMessage(const String &topic,
   }
 
   const char *transport = doc["transport"] | "";
+
+  // Ping 探测：无需 payloadHex，独立处理
+  if (strcmp(transport, "ping") == 0) {
+    pingForward(doc, sessionId);
+    return;
+  }
+
   const char *payloadHex = doc["payloadHex"] | "";
 
   if (!transport[0] || !payloadHex[0]) {
@@ -1082,6 +1105,90 @@ static bool modbusTcpForward(JsonDocument &doc, JsonDocument &resp) {
   resp["hex"] = bytesToHexString(buffer, offset);
   resp["length"] = static_cast<uint32_t>(offset);
   return true;
+}
+
+static void pingForward(JsonDocument &doc, const String &sessionId) {
+  StaticJsonDocument<512> resp;
+  resp["sessionId"] = sessionId;
+  resp["type"] = "ping";
+
+  if (!doc.containsKey("pingTarget")) {
+    resp["success"] = false;
+    resp["error"] = "missing_ping_target";
+    String out;
+    serializeJson(resp, out);
+    String respTopic = buildMqttResponseTopic(sessionId);
+    g_mqttClient.publish(respTopic.c_str(), out.c_str(), false, 1);
+    return;
+  }
+
+  JsonObject target = doc["pingTarget"].as<JsonObject>();
+  const char *ipStr = target["ip"] | "";
+  uint16_t port = target["port"] | 502;
+  uint16_t seq = doc["seq"] | 0;
+
+  IPAddress targetIp;
+  if (!parseIpAddress(ipStr, targetIp)) {
+    resp["success"] = false;
+    resp["error"] = "invalid_ip";
+    resp["seq"] = seq;
+    String out;
+    serializeJson(resp, out);
+    String respTopic = buildMqttResponseTopic(sessionId);
+    g_mqttClient.publish(respTopic.c_str(), out.c_str(), false, 1);
+    return;
+  }
+
+  resp["ip"] = ipStr;
+  resp["port"] = port;
+  resp["seq"] = seq;
+
+  // 诊断信息：W5500 本机 IP 和链路状态
+  IPAddress localIp = Ethernet.localIP();
+  resp["localIp"] = localIp.toString();
+  auto link = Ethernet.linkStatus();
+  resp["link"] = (link == LinkON)    ? "up"
+                 : (link == LinkOFF) ? "down"
+                                     : "unknown";
+
+  // 链路未连接直接返回
+  if (link == LinkOFF) {
+    resp["success"] = false;
+    resp["error"] = "eth_link_down";
+    String out;
+    serializeJson(resp, out);
+    String respTopic = buildMqttResponseTopic(sessionId);
+    g_mqttClient.publish(respTopic.c_str(), out.c_str(), false, 1);
+    return;
+  }
+
+  // TCP Connect 探测
+  EthernetClient pingClient;
+  unsigned long startMs = millis();
+  bool connected = pingClient.connect(targetIp, port);
+  unsigned long latency = millis() - startMs;
+
+  if (connected) {
+    pingClient.stop();
+    resp["success"] = true;
+    resp["latency"] = (uint32_t)latency;
+  } else {
+    resp["success"] = false;
+    resp["latency"] = (uint32_t)latency;
+    // Ethernet 库内 connect 的默认超时就是 1000ms
+    if (latency >= 1000) {
+      resp["error"] = "timeout_unreachable";
+    } else if (latency < 100) {
+      resp["error"] = "socket_error";
+    } else {
+      resp["error"] = "port_refused";
+    }
+  }
+
+  String out;
+  serializeJson(resp, out);
+  String respTopic = buildMqttResponseTopic(sessionId);
+  g_mqttClient.publish(respTopic.c_str(), out.c_str(), false, 1);
 }
 
 static bool modbusRtuForward(JsonDocument &doc, JsonDocument &resp) {
