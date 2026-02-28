@@ -104,16 +104,16 @@ UART 使用 **UART1**，引脚分配如下：
 
 | 功能       | ESP32-C3 GPIO | 连接到 RS485 模块引脚 |
 |------------|---------------|------------------------|
-| UART1 TXD  | GPIO21        | 模块 DI/TX            |
-| UART1 RXD  | GPIO20        | 模块 RO/RX            |
+| UART1 TXD  | GPIO10        | 模块 DI/TX            |
+| UART1 RXD  | GPIO2         | 模块 RO/RX            |
 | VCC        | 3.3V 或 5V    | 视模块规格            |
 | GND        | GND           | 与 ESP32 共地         |
 
 说明：
 
 - `Config.h` 中的定义：
-  - `PIN_RS485_TX = 21`  
-  - `PIN_RS485_RX = 20`
+  - `PIN_RS485_TX = 10`  
+  - `PIN_RS485_RX = 2`
 - 串口初始化：`HardwareSerial RS485Serial(1);` 使用 UART1，并通过 `RS485Serial.begin(..., PIN_RS485_RX, PIN_RS485_TX)` 映射到上述管脚。
 - 自动流控模块在发送时自动拉高 DE/RE，在接收时自动进入接收，无需 MCU 软件控制。
 
