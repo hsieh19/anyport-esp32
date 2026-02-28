@@ -83,10 +83,12 @@ static const int PIN_W5500_INT = 3; // W5500 中断引脚（INT，可选）
 //   - 使用 UART1 作为 RS485 通道；
 //   - TX 使用 GPIO21，RX 使用 GPIO20（对齐 README.md 推荐值）。
 //
-// 重要：ESP32-C3 的 GPIO18/GPIO19 是 USB D-/D+ 引脚，
-// 如果使用 USB CDC 串口，这两个引脚不能用于其他功能。
-static const int PIN_RS485_TX = 21; // RS485 TX — 对齐 README 且避开冲突
-static const int PIN_RS485_RX = 20; // RS485 RX — 对齐 README 且避开冲突
+// 重要：ESP32-C3 的 GPIO20(RX) 和 GPIO21(TX) 经常在带串口芯片（如
+// CH343）的开发板上 物理短接在 USB 芯片引脚上！继续接在这上面会导致
+// RS485与电脑USB串口物理打架，接收发不出。 我们在此将默认 RS485
+// 转移至安全空闲的引脚：
+static const int PIN_RS485_RX = 2;  // 请将 RS485 的 RO/RX 接到 GPIO2
+static const int PIN_RS485_TX = 10; // 请将 RS485 的 DI/TX 接到 GPIO10
 
 // -----------------------
 // 1.3 WiFi 与系统相关配置
@@ -1236,6 +1238,11 @@ static bool modbusRtuForward(JsonDocument &doc, JsonDocument &resp) {
     resp["message"] = "invalid_hex";
     g_rs485Busy = false;
     return false;
+  }
+
+  // 关键保护：强制清空串口中所有的历史数据或回显干扰垃圾
+  while (RS485Serial.available() > 0) {
+    RS485Serial.read();
   }
 
   RS485Serial.write(g_rtuRxBuffer, length);
