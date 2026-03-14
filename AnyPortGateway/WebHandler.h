@@ -128,6 +128,8 @@ static void handleHttpRoot() {
           g_wifiStaConfig.ssid + "'><br>";
   html += "<label>WiFi 密码:</label><input name='wifiPwd' type='password' "
           "placeholder='********'><br>";
+  html += "<label>Domain Name:</label><input name='mdnsName' value='" +
+          g_mdnsName + "' maxlength='16' placeholder='anyport'><span style='color:#666;font-size:13px;margin-left:5px'>可使用 " + g_mdnsName + ".local 进行访问</span><br>";
   html += "<label>工作模式:</label><select name='workMode' "
           "onchange='uiToggleMode(this.value)'>";
   html += "<option value='0'" +
@@ -370,6 +372,13 @@ static void handleHttpConfig() {
     }
     g_wifiStaConfig.ssid = wifiSsid;
     g_wifiStaConfig.valid = true;
+  }
+
+  // mDNS 保存
+  String mdnsName = g_httpServer.arg("mdnsName");
+  if (mdnsName.length() > 0 && mdnsName.length() <= 16) {
+    g_prefs.putString("mdnsName", mdnsName);
+    g_mdnsName = mdnsName;
   }
 
   // MQTT 保存

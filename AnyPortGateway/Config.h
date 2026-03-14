@@ -23,11 +23,13 @@ EthStaticConfig g_ethConfig = {};
 WifiStaConfig g_wifiStaConfig = {};
 MqttRuntimeConfig g_mqttConfig = {};
 NtpConfig g_ntpConfig = {};
+String g_mdnsName = MDNS_DEFAULT_NAME;
 
 WebServer g_httpServer(80);
 uint8_t g_rtuRxBuffer[512] __attribute__((aligned(4)));
 size_t g_rtuRxLength = 0;
 bool g_needRestart = false;
+#include <ESPmDNS.h>
 unsigned long g_lastHeartbeatMs = 0;
 
 // -----------------------
@@ -91,6 +93,9 @@ static void loadPersistentConfig() {
         g_mqttConfig.gatewayId = MQTT_GATEWAY_ID;
         g_mqttConfig.valid = true;
     }
+
+    g_mdnsName = g_prefs.getString("mdnsName", MDNS_DEFAULT_NAME);
+    
     g_prefs.end();
 }
 
@@ -102,6 +107,7 @@ void anyportHardwareInit() {
     initRs485Port();
     loadPersistentConfig();
     initWifi();
+    initMdns();
     syncNtpTime();
     initSpiAndEthernet();
     initMqttClient();

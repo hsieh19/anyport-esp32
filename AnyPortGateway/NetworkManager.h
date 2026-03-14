@@ -133,3 +133,16 @@ static void initSpiAndEthernet() {
     Serial.print("[Init] Ethernet lib hardware status: ");
     Serial.println(ver);
 }
+
+static void initMdns() {
+    if (g_mdnsName.length() == 0) g_mdnsName = MDNS_DEFAULT_NAME;
+    
+    if (MDNS.begin(g_mdnsName.c_str())) {
+        Serial.print("[mDNS] Started, host: ");
+        Serial.print(g_mdnsName);
+        Serial.println(".local");
+        MDNS.addService("http", "tcp", 80);
+    } else {
+        Serial.println("[mDNS] Start FAILED");
+    }
+}
