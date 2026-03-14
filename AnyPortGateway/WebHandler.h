@@ -125,7 +125,8 @@ static void handleHttpRoot() {
   html += "<div class='card'>";
   html += "<h2>基础配置</h2>";
   html += "<label>WiFi SSID:</label><input name='wifiSsid' value='" +
-          g_wifiStaConfig.ssid + "'><br>";
+          g_wifiStaConfig.ssid + "'><span style='color:#666;font-size:13px;margin-left:5px'>当前 IP: " + 
+          (WiFi.status() == WL_CONNECTED ? WiFi.localIP().toString() : WiFi.softAPIP().toString()) + "</span><br>";
   html += "<label>WiFi 密码:</label><input name='wifiPwd' type='password' "
           "placeholder='********'><br>";
   html += "<label>Domain Name:</label><input name='mdnsName' value='" +
@@ -138,9 +139,12 @@ static void handleHttpRoot() {
   html += "<option value='1'" +
           String(g_workMode == WorkMode::SIMULATOR ? " selected" : "") +
           ">从站模拟器模式</option>";
+  html += "<option value='2'" +
+          String(g_workMode == WorkMode::TRANSPARENT ? " selected" : "") +
+          ">USB 转 RS485 透传模式</option>";
   html += "</select>";
   html += "<span class='badge'>当前运行模式: " +
-          String(g_workMode == WorkMode::GATEWAY ? "MQTT 网关" : "从站模拟器") +
+          String(g_workMode == WorkMode::GATEWAY ? "MQTT 网关" : (g_workMode == WorkMode::SIMULATOR ? "从站模拟器" : "USB 透传")) +
           "</span>";
   html += "</div>";
 
@@ -250,6 +254,35 @@ static void handleHttpRoot() {
           (g_ethConfig.valid ? g_ethConfig.dns.toString() : "") + "'><br>";
   html += "</div>";
   html += "</div>";
+  
+  // 4. 模式 C: USB 透传配置
+  html += "<div id='secTransparent' class='card' style='display:" +
+          String(g_workMode == WorkMode::TRANSPARENT ? "block" : "none") + "'>";
+  html += "<h2>USB 转 RS485 透传配置</h2>";
+  html += "<p style='color:#856404;font-size:14px;background:#fff3cd;padding:10px;border-radius:4px;border:1px solid #ffeeba'><strong>提示：</strong>当前硬件不支持自动跟随设置。上位调试软件配置的波特率、数据位、校验位、停止位参数将无效，请确保在此页面配置的参数与您的 RS485 设备一致。</p>";
+  html += "<h3>RS485 串口参数</h3>";
+  
+  html += "<label>波特率:</label><select name='tBaud'>";
+  uint32_t bauds_t[] = {4800, 9600, 19200, 38400, 115200};
+  for (int i = 0; i < 5; i++)
+    html += "<option value='" + String(bauds_t[i]) + "'" +
+            (g_transBaud == bauds_t[i] ? " selected" : "") + ">" +
+            String(bauds_t[i]) + "</option>";
+  html += "</select><br>";
+
+  html += "<label>数据位:</label><select name='tData'>";
+  html += "<option value='8' " + String(g_transDataBits == 8 ? "selected" : "") + ">8位</option>";
+  html += "<option value='7' " + String(g_transDataBits == 7 ? "selected" : "") + ">7位</option></select><br>";
+
+  html += "<label>检验位:</label><select name='tParity'>";
+  html += "<option value='0' " + String(g_transParity == 0 ? "selected" : "") + ">None</option>";
+  html += "<option value='1' " + String(g_transParity == 1 ? "selected" : "") + ">Even</option>";
+  html += "<option value='2' " + String(g_transParity == 2 ? "selected" : "") + ">Odd</option></select><br>";
+
+  html += "<label>停止位:</label><select name='tStop'>";
+  html += "<option value='1' " + String(g_transStopBits == 1 ? "selected" : "") + ">1位</option>";
+  html += "<option value='2' " + String(g_transStopBits == 2 ? "selected" : "") + ">2位</option></select><br>";
+  html += "</div>";
 
   // 5. 寄存器配置区
   html += "<div id='secRegisters' class='card' style='display:" +
@@ -274,6 +307,8 @@ static void handleHttpRoot() {
           "document.getElementById('secSimulator').style.display=(m=='1'?'"
           "block':'none'); "
           "document.getElementById('secRegisters').style.display=(m=='1'?'"
+          "block':'none'); "
+          "document.getElementById('secTransparent').style.display=(m=='2'?'"
           "block':'none'); }";
   html += "function "
           "addRegRow(d={addr:40001,name:'',targetVal:0,val:0,type:4,endian:0,"
@@ -438,6 +473,20 @@ static void handleHttpConfig() {
       g_ethConfig.dns = dns;
       g_ethConfig.valid = true;
     }
+  }
+
+  // 透传模式保存
+  String tBaud = g_httpServer.arg("tBaud");
+  if (tBaud.length() > 0) {
+    g_transBaud = tBaud.toInt();
+    g_transDataBits = g_httpServer.arg("tData").toInt();
+    g_transParity = g_httpServer.arg("tParity").toInt();
+    g_transStopBits = g_httpServer.arg("tStop").toInt();
+
+    g_prefs.putUInt("tBaud", g_transBaud);
+    g_prefs.putUChar("tData", g_transDataBits);
+    g_prefs.putUChar("tParity", g_transParity);
+    g_prefs.putUChar("tStop", g_transStopBits);
   }
 
   g_prefs.end();

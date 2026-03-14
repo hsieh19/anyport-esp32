@@ -22,7 +22,6 @@ inline bool parseIpAddress(const char *str, IPAddress &outIp) {
 
 static void applyEthConfig() {
     if (!g_ethConfig.valid) {
-        Serial.println("[ETH] No config, skip");
         return;
     }
     WiFi.macAddress(g_macAddress);
@@ -30,7 +29,7 @@ static void applyEthConfig() {
 
     Ethernet.begin(g_macAddress, g_ethConfig.ip, g_ethConfig.dns,
                    g_ethConfig.gateway, g_ethConfig.subnet);
-    Serial.print("[ETH] IP=");
+    Serial.print("[W5500] Static IP Fixed: ");
     Serial.println(Ethernet.localIP());
 }
 
@@ -41,18 +40,18 @@ static void initWifi() {
 
     if (g_wifiStaConfig.valid) {
         WiFi.mode(WIFI_STA);
-        Serial.print("WiFi STA connecting to SSID: ");
+        Serial.print("WiFi Connecting to: ");
         Serial.println(g_wifiStaConfig.ssid);
         WiFi.begin(g_wifiStaConfig.ssid.c_str(), g_wifiStaConfig.password.c_str());
 
         unsigned long start = millis();
-        const unsigned long timeoutMs = 5000; // 优化：缩短超时至 5s
+        const unsigned long timeoutMs = 15000; // 15s 超时确保 DHCP IP
         while (WiFi.status() != WL_CONNECTED && (millis() - start) < timeoutMs) {
             delay(100);
         }
 
         if (WiFi.status() != WL_CONNECTED) {
-            Serial.println("WiFi STA connect failed, fallback to AP mode");
+            Serial.println("WiFi Timed out, using AP mode");
             WiFi.disconnect(true);
             delay(200);
             WiFi.mode(WIFI_AP);
@@ -88,7 +87,7 @@ static void syncNtpTime() {
     unsigned long start = millis();
     bool synced = false;
     Serial.print("[NTP] Waiting for sync");
-    while (millis() - start < 3000) { // 优化：缩短等待至 3s
+    while (millis() - start < 3000) {
         time_t now = time(nullptr);
         if (now > 1000000000L) {
             synced = true;

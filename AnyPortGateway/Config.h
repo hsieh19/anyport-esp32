@@ -24,6 +24,10 @@ WifiStaConfig g_wifiStaConfig = {};
 MqttRuntimeConfig g_mqttConfig = {};
 NtpConfig g_ntpConfig = {};
 String g_mdnsName = MDNS_DEFAULT_NAME;
+uint32_t g_transBaud = 9600;
+uint8_t g_transDataBits = 8;
+uint8_t g_transParity = 0; // 0:None, 1:Even, 2:Odd
+uint8_t g_transStopBits = 1;
 
 WebServer g_httpServer(80);
 uint8_t g_rtuRxBuffer[512] __attribute__((aligned(4)));
@@ -41,6 +45,7 @@ unsigned long g_lastHeartbeatMs = 0;
 #include "WebHandler.h"
 #include "SimulatorCore.h"
 #include "SimulatorWeb.h"
+#include "TransparentHandler.h"
 
 // -----------------------
 // 3. 顶层业务逻辑实现
@@ -95,6 +100,10 @@ static void loadPersistentConfig() {
     }
 
     g_mdnsName = g_prefs.getString("mdnsName", MDNS_DEFAULT_NAME);
+    g_transBaud = g_prefs.getUInt("tBaud", 9600);
+    g_transDataBits = g_prefs.getUChar("tData", 8);
+    g_transParity = g_prefs.getUChar("tParity", 0);
+    g_transStopBits = g_prefs.getUChar("tStop", 1);
     
     g_prefs.end();
 }
@@ -114,6 +123,10 @@ void anyportHardwareInit() {
     initHttpServer();
     initSimulatorWeb(g_httpServer);
 
+    if (g_workMode == WorkMode::TRANSPARENT) {
+        initTransparentMode();
+    }
+
     Serial.println("=== Initialization Complete ===");
 }
 
@@ -122,8 +135,10 @@ void anyportGatewayLoop() {
         if (ensureMqttConnected()) {
             g_mqttClient.loop();
         }
-    } else {
+    } else if (g_workMode == WorkMode::SIMULATOR) {
         simulatorLoop();
+    } else if (g_workMode == WorkMode::TRANSPARENT) {
+        loopTransparentMode();
     }
 
     g_httpServer.handleClient();
