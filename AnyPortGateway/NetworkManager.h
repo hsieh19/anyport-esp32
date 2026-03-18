@@ -29,8 +29,8 @@ static void applyEthConfig() {
 
     Ethernet.begin(g_macAddress, g_ethConfig.ip, g_ethConfig.dns,
                    g_ethConfig.gateway, g_ethConfig.subnet);
-    Serial.print("[W5500] Static IP Fixed: ");
-    Serial.println(Ethernet.localIP());
+    APP_PRINT("[W5500] Static IP Fixed: ");
+    APP_PRINTLN(Ethernet.localIP());
 }
 
 static void initWifi() {
@@ -40,8 +40,8 @@ static void initWifi() {
 
     if (g_wifiStaConfig.valid) {
         WiFi.mode(WIFI_STA);
-        Serial.print("WiFi Connecting to: ");
-        Serial.println(g_wifiStaConfig.ssid);
+        APP_PRINT("WiFi Connecting to: ");
+        APP_PRINTLN(g_wifiStaConfig.ssid);
         WiFi.begin(g_wifiStaConfig.ssid.c_str(), g_wifiStaConfig.password.c_str());
 
         unsigned long start = millis();
@@ -51,7 +51,7 @@ static void initWifi() {
         }
 
         if (WiFi.status() != WL_CONNECTED) {
-            Serial.println("WiFi Timed out, using AP mode");
+            APP_PRINTLN("WiFi Timed out, using AP mode");
             WiFi.disconnect(true);
             delay(200);
             WiFi.mode(WIFI_AP);
@@ -65,22 +65,27 @@ static void initWifi() {
     }
 
     if (WiFi.getMode() == WIFI_STA && WiFi.status() == WL_CONNECTED) {
-        Serial.print("WiFi STA connected, IP: ");
-        Serial.println(WiFi.localIP());
+        APP_PRINT("WiFi STA connected, IP: ");
+        APP_PRINTLN(WiFi.localIP());
     } else {
-        Serial.print("WiFi AP mode started, SSID: ");
-        Serial.println(WIFI_AP_SSID);
-        Serial.print("AP IP: ");
-        Serial.println(WiFi.softAPIP());
+        APP_PRINT("WiFi AP mode started, SSID: ");
+        APP_PRINTLN(WIFI_AP_SSID);
+        APP_PRINT("AP IP: ");
+        APP_PRINTLN(WiFi.softAPIP());
     }
 }
 
 static void syncNtpTime() {
-    Serial.println("[NTP] Initializing time sync...");
+    if (g_workMode == WorkMode::TRANSPARENT) {
+        configTime(8 * 3600, 0, g_ntpConfig.server.c_str(), "pool.ntp.org", "time.nist.gov");
+        return; 
+    }
+
+    APP_PRINTLN("[NTP] Initializing time sync...");
     configTime(8 * 3600, 0, g_ntpConfig.server.c_str(), "pool.ntp.org", "time.nist.gov");
 
     if (WiFi.status() != WL_CONNECTED) {
-        Serial.println("[NTP] WiFi not connected, skip sync");
+        APP_PRINTLN("[NTP] WiFi not connected, skip sync");
         return;
     }
 
@@ -104,10 +109,10 @@ static void syncNtpTime() {
         localtime_r(&now, &timeinfo);
         char timeStr[64];
         strftime(timeStr, sizeof(timeStr), "%Y-%m-%d %H:%M:%S", &timeinfo);
-        Serial.print("[NTP] System time synced: ");
-        Serial.println(timeStr);
+        APP_PRINT("[NTP] System time synced: ");
+        APP_PRINTLN(timeStr);
     } else {
-        Serial.println("[NTP] Sync FAILED (timeout), proceeding with default time");
+        APP_PRINTLN("[NTP] Sync FAILED (timeout), proceeding with default time");
     }
 }
 
@@ -129,19 +134,19 @@ static void initSpiAndEthernet() {
     applyEthConfig();
 
     uint8_t ver = Ethernet.hardwareStatus();
-    Serial.print("[Init] Ethernet lib hardware status: ");
-    Serial.println(ver);
+    APP_PRINT("[Init] Ethernet lib hardware status: ");
+    APP_PRINTLN(ver);
 }
 
 static void initMdns() {
     if (g_mdnsName.length() == 0) g_mdnsName = MDNS_DEFAULT_NAME;
     
     if (MDNS.begin(g_mdnsName.c_str())) {
-        Serial.print("[mDNS] Started, host: ");
-        Serial.print(g_mdnsName);
-        Serial.println(".local");
+        APP_PRINT("[mDNS] Started, host: ");
+        APP_PRINT(g_mdnsName);
+        APP_PRINTLN(".local");
         MDNS.addService("http", "tcp", 80);
     } else {
-        Serial.println("[mDNS] Start FAILED");
+        APP_PRINTLN("[mDNS] Start FAILED");
     }
 }

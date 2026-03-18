@@ -42,7 +42,7 @@ inline void initRs485Port() {
     g_rs485CurrentBaud = RS485_DEFAULT_BAUDRATE;
     g_rs485CurrentConfig = SERIAL_8N1;
     RS485Serial.begin(RS485_DEFAULT_BAUDRATE, SERIAL_8N1, PIN_RS485_RX, PIN_RS485_TX);
-    Serial.println("[RS485] hardware serial initialized");
+    APP_PRINTLN("[RS485] hardware serial initialized");
 }
 
 inline bool buildRs485Config(uint32_t requestedBaud, uint8_t stopBits,

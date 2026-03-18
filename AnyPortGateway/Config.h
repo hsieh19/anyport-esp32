@@ -111,10 +111,13 @@ static void loadPersistentConfig() {
 void anyportHardwareInit() {
     Serial.begin(115200);
     delay(500);
-    Serial.println("\n=== AnyPort Gateway v" FIRMWARE_VERSION " Starting ===");
+
+    // 关键修复：必须首先加载配置，才能确定是否处于静默的透传模式
+    loadPersistentConfig();
+
+    APP_PRINTLN("\n=== AnyPort Gateway v" FIRMWARE_VERSION " Starting ===");
 
     initRs485Port();
-    loadPersistentConfig();
     initWifi();
     initMdns();
     syncNtpTime();
@@ -125,9 +128,9 @@ void anyportHardwareInit() {
 
     if (g_workMode == WorkMode::TRANSPARENT) {
         initTransparentMode();
+    } else {
+        APP_PRINTLN("=== Initialization Complete ===");
     }
-
-    Serial.println("=== Initialization Complete ===");
 }
 
 void anyportGatewayLoop() {

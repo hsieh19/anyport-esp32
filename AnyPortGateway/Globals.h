@@ -119,3 +119,23 @@ extern uint8_t g_transDataBits;
 extern uint8_t g_transParity;
 extern uint8_t g_transStopBits;
 extern unsigned long g_lastHeartbeatMs;
+
+// -----------------------
+// 5. 调试宏
+// -----------------------
+#define APP_LOG(fmt, ...) do { \
+    if (g_workMode != WorkMode::TRANSPARENT) { \
+        Serial.printf(fmt, ##__VA_ARGS__); \
+        Serial.println(); \
+    } \
+} while (0)
+#define APP_PRINT(x) do { \
+    if (g_workMode != WorkMode::TRANSPARENT) { \
+        Serial.print(x); \
+    } \
+} while (0)
+#define APP_PRINTLN(x) do { \
+    if (g_workMode != WorkMode::TRANSPARENT) { \
+        Serial.println(x); \
+    } \
+} while (0)
