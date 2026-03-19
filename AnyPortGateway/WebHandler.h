@@ -236,8 +236,7 @@ static void handleHttpRoot() {
           ">禁用</option></select>";
   html += "<div id='simTcpExt' style='display:" +
           String(g_simConfig.tcpEnabled ? "block" : "none") + "'>";
-  html +=
-      "<label>监听端口:</label><input name='simTcpPort' type='number' value='" +
+  html += "<label>监听端口:</label><input name='simTcpPort' type='number' value='" +
       String(g_simConfig.tcpPort) + "' style='width:60px'><br>";
   html += "<h4>网络静态 IP (W5500)</h4>";
   html += "<label>IP 地址:</label><input name='ethIp' "
@@ -253,6 +252,13 @@ static void handleHttpRoot() {
           "value='" +
           (g_ethConfig.valid ? g_ethConfig.dns.toString() : "") + "'><br>";
   html += "</div>";
+  html += "<h3>报文监听 (Sniffer)</h3>";
+  html += "<label>启用监听:</label><input type='checkbox' name='simMonitorEnabled' " +
+          String(g_simConfig.monitorEnabled ? "checked" : "") + " style='width:auto'><br>";
+  html += "<label>过滤模式:</label><select name='simMonitorFilter'>";
+  html += "<option value='0' " + String(g_simConfig.monitorFilter == 0 ? "selected" : "") + ">全线报文</option>";
+  html += "<option value='1' " + String(g_simConfig.monitorFilter == 1 ? "selected" : "") + ">仅本站报文</option>";
+  html += "</select>";
   html += "</div>";
   
   // 4. 模式 C: USB 透传配置
@@ -297,6 +303,15 @@ static void handleHttpRoot() {
           "onclick='addRegRow()'>+ 添加寄存器</button>";
   html += "</div>";
 
+  // 6. 报文监听区
+  html += "<div id='secMonitor' class='card' style='display:" +
+          String(g_workMode == WorkMode::SIMULATOR ? "block" : "none") + "'>";
+  html += "<h2>实时报文监听</h2>";
+  html += "<div id='monitorLog' style='background:#1e1e1e; color:#d4d4d4; padding:10px; font-family:monospace; height:300px; overflow-y:auto; font-size:12px; border-radius:4px; line-height:1.5'>等待数据...</div>";
+  html += "<button type='button' style='margin-top:10px; background:#6c757d' onclick='uiClearMonitor()'>清空屏幕</button>";
+  html += "<button type='button' id='btnPause' style='margin-top:10px; margin-left:10px; background:#336699' onclick='uiTogglePause()'>暂停接收</button>";
+  html += "</div>";
+
   html += "<button type='submit' class='save-btn'>保存并重启设备</button>";
   html += "</form>";
 
@@ -307,6 +322,8 @@ static void handleHttpRoot() {
           "document.getElementById('secSimulator').style.display=(m=='1'?'"
           "block':'none'); "
           "document.getElementById('secRegisters').style.display=(m=='1'?'"
+          "block':'none'); "
+          "document.getElementById('secMonitor').style.display=(m=='1'?'"
           "block':'none'); "
           "document.getElementById('secTransparent').style.display=(m=='2'?'"
           "block':'none'); }";
@@ -333,7 +350,17 @@ static void handleHttpRoot() {
           "data.forEach(d=>{ let row=document.getElementById('reg-'+d.addr); "
           "if(row){ let sv=row.querySelector('.status-val'); if(sv) "
           "sv.value=d.val; } }); }catch(e){} }";
-  html += "setInterval(refreshRegValues, 1000);";
+  html += "let monitorPaused=false; function uiTogglePause(){ monitorPaused=!monitorPaused; document.getElementById('btnPause').innerText=monitorPaused?'继续接收':'暂停接收'; document.getElementById('btnPause').style.background=monitorPaused?'#28a745':'#336699'; }";
+  html += "async function uiClearMonitor(){ document.getElementById('monitorLog').innerHTML=''; await fetch('/api/monitor/clear',{method:'POST'}); }";
+  html += "async function refreshMonitor(){ if(document.getElementById('secMonitor').style.display=='none' || monitorPaused)return; try{ "
+          "let r=await fetch('/api/monitor'); let logs=await r.json(); let c=document.getElementById('monitorLog'); "
+          "if(logs.length>0){ let h=''; logs.forEach(l=>{ let color=l.dir=='TX'?'#ce9178':'#9cdcfe'; "
+          "let ms=l.t%1000; let s=Math.floor(l.t/1000)%60; let m=Math.floor(l.t/60000); "
+          "let ts=`${(m+'').padStart(2,'0')}:${(s+'').padStart(2,'0')}.${(ms+'').padStart(3,'0')}`; "
+          "h+=`<div><span style='color:#808080'>[${ts}]</span> <span style='color:${color};font-weight:bold'>${l.dir}</span> <span style='color:#4ec9b0'>[${l.type}]</span> ${l.hex}</div>`; }); "
+          "c.innerHTML=h; c.scrollTop=c.scrollHeight; } else if(logs.length==0) { c.innerHTML='等待数据...'; } }catch(e){} }";
+  html += "setInterval(refreshRegValues, 2000);";
+  html += "setInterval(refreshMonitor, 1000);";
   html += "document.getElementById('mainForm').onsubmit=async function(e){";
   html += " if(this.submitting) return; "
           "if(document.getElementsByName('workMode')[0].value=='1'){";
@@ -352,7 +379,7 @@ static void handleHttpRoot() {
   html += "  try {";
   html += "    let r1 = await fetch('/api/registers',{method:'POST',body:JSON.stringify(regs)});";
   html += "    if(!r1.ok) throw new Error('保存寄存器失败');";
-  html += "    let cfg={rtuEnabled:document.getElementsByName('simRtuEnabled')[0].value=='1',baud:parseInt(document.getElementsByName('simBaud')[0].value),parity:parseInt(document.getElementsByName('simParity')[0].value),stopBits:parseInt(document.getElementsByName('simStop')[0].value),dataBits:parseInt(document.getElementsByName('simDataBits')[0].value),unitId:parseInt(document.getElementsByName('simUnitId')[0].value),tcpEnabled:document.getElementsByName('simTcpEnabled')[0].value=='1',tcpPort:parseInt(document.getElementsByName('simTcpPort')[0].value)};";
+  html += "    let cfg={rtuEnabled:document.getElementsByName('simRtuEnabled')[0].value=='1',baud:parseInt(document.getElementsByName('simBaud')[0].value),parity:parseInt(document.getElementsByName('simParity')[0].value),stopBits:parseInt(document.getElementsByName('simStop')[0].value),dataBits:parseInt(document.getElementsByName('simDataBits')[0].value),unitId:parseInt(document.getElementsByName('simUnitId')[0].value),tcpEnabled:document.getElementsByName('simTcpEnabled')[0].value=='1',tcpPort:parseInt(document.getElementsByName('simTcpPort')[0].value),monitorEnabled:document.getElementsByName('simMonitorEnabled')[0].checked,monitorFilter:parseInt(document.getElementsByName('simMonitorFilter')[0].value)};";
   html += "    let r2 = await fetch('/api/simConfig',{method:'POST',body:JSON.stringify(cfg)});";
   html += "    if(!r2.ok) throw new Error('保存模拟器配置失败');";
   html += "    await new Promise(r => setTimeout(r, 500));"; // 额外等待半秒确保 Flash 写入完全结束

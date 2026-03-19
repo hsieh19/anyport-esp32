@@ -100,6 +100,8 @@ static void handleGetSimConfig(WebServer& server) {
     doc["unitId"] = g_simConfig.unitId;
     doc["tcpEnabled"] = g_simConfig.tcpEnabled;
     doc["tcpPort"] = g_simConfig.tcpPort;
+    doc["monitorEnabled"] = g_simConfig.monitorEnabled;
+    doc["monitorFilter"] = g_simConfig.monitorFilter;
 
     String out;
     serializeJson(doc, out);
@@ -123,10 +125,44 @@ static void handleUpdateSimConfig(WebServer& server) {
     g_simConfig.unitId = doc["unitId"] | 1;
     g_simConfig.tcpEnabled = doc["tcpEnabled"] | false;
     g_simConfig.tcpPort = doc["tcpPort"] | 502;
+    g_simConfig.monitorEnabled = doc["monitorEnabled"] | false;
+    g_simConfig.monitorFilter = doc["monitorFilter"] | 0;
     
     saveSimConfig();
     server.sendHeader("Cache-Control", "no-cache");
     server.send(200, "text/plain", "OK");
+}
+
+/**
+ * @brief 获取报文监听数据的 API
+ */
+static void handleGetMonitorLogs(WebServer& server) {
+    DynamicJsonDocument doc(8192);
+    JsonArray arr = doc.to<JsonArray>();
+
+    for (size_t i = 0; i < g_monitorCount; i++) {
+        size_t idx = (g_monitorHead + i) % MAX_MONITOR_LOGS;
+        JsonObject obj = arr.createNestedObject();
+        obj["t"] = g_monitorLogs[idx].timestamp;
+        obj["dir"] = g_monitorLogs[idx].isOutgoing ? "TX" : "RX";
+        obj["type"] = g_monitorLogs[idx].type == 0 ? "RTU" : "TCP";
+        
+        static const char* hexChars = "0123456789ABCDEF";
+        String hex = "";
+        hex.reserve(g_monitorLogs[idx].length * 3);
+        for (size_t j = 0; j < g_monitorLogs[idx].length; j++) {
+            uint8_t b = g_monitorLogs[idx].data[j];
+            hex += hexChars[b >> 4];
+            hex += hexChars[b & 0x0F];
+            hex += " ";
+        }
+        obj["hex"] = hex;
+    }
+
+    String out;
+    serializeJson(doc, out);
+    server.sendHeader("Cache-Control", "no-cache");
+    server.send(200, "application/json", out);
 }
 
 /**
@@ -157,6 +193,11 @@ void initSimulatorWeb(WebServer& server) {
     server.on("/api/registers", HTTP_POST, [&server]() { handleUpdateRegisters(server); });
     server.on("/api/simConfig", HTTP_GET, [&server]() { handleGetSimConfig(server); });
     server.on("/api/simConfig", HTTP_POST, [&server]() { handleUpdateSimConfig(server); });
+    server.on("/api/monitor", HTTP_GET, [&server]() { handleGetMonitorLogs(server); });
+    server.on("/api/monitor/clear", HTTP_POST, [&server]() {
+        clearMonitorLogs();
+        server.send(200, "text/plain", "OK");
+    });
     server.on("/api/mode", HTTP_POST, [&server]() { handleSetMode(server); });
     
     // 异步状态同步接口

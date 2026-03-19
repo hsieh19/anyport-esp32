@@ -72,13 +72,56 @@ struct SimulatorGlobalConfig {
     uint8_t unitId;      // 从站地址码
     bool tcpEnabled;
     uint16_t tcpPort;
+    bool monitorEnabled; // 是否开启报文监听
+    uint8_t monitorFilter; // 0:全线报文, 1:仅本站报文
 };
 
 // 共享寄存器池
 static const size_t MAX_SIM_VARIABLES = 32;
 static SimulatorVariable g_simVariables[MAX_SIM_VARIABLES];
 static size_t g_simVarCount = 0;
-static SimulatorGlobalConfig g_simConfig = {true, 9600, 1, 0, 8, 1, true, 502};
+static SimulatorGlobalConfig g_simConfig = {true, 9600, 1, 0, 8, 1, true, 502, false, 0};
+
+// 报文监听循环缓冲区
+struct MonitorLog {
+    unsigned long timestamp;
+    bool isOutgoing; // TX: true, RX: false
+    uint8_t type;    // 0: RTU, 1: TCP
+    uint8_t data[260];
+    size_t length;
+};
+static const size_t MAX_MONITOR_LOGS = 20;
+static MonitorLog g_monitorLogs[MAX_MONITOR_LOGS];
+static size_t g_monitorHead = 0;
+static size_t g_monitorCount = 0;
+
+static void addMonitorLog(bool isOutgoing, uint8_t type, const uint8_t* data, size_t len) {
+    if (!g_simConfig.monitorEnabled) return;
+    
+    // 过滤逻辑：本站报文过滤（针对本站地址或响应）
+    if (g_simConfig.monitorFilter == 1 && len > 0) {
+        if (data[0] != g_simConfig.unitId) return;
+    }
+
+    size_t index = (g_monitorHead + g_monitorCount) % MAX_MONITOR_LOGS;
+    g_monitorLogs[index].timestamp = millis();
+    g_monitorLogs[index].isOutgoing = isOutgoing;
+    g_monitorLogs[index].type = type;
+    g_monitorLogs[index].length = (len > 260) ? 260 : len;
+    memcpy(g_monitorLogs[index].data, data, g_monitorLogs[index].length);
+
+    if (g_monitorCount < MAX_MONITOR_LOGS) {
+        g_monitorCount++;
+    } else {
+        g_monitorHead = (g_monitorHead + 1) % MAX_MONITOR_LOGS;
+    }
+}
+
+// 清除监听日志
+static void clearMonitorLogs() {
+    g_monitorHead = 0;
+    g_monitorCount = 0;
+}
 
 // Holding / Input Register 缓冲区 (3xxxx / 4xxxx)
 static uint16_t g_holdingRegisters[1000]; 
@@ -88,8 +131,15 @@ static uint8_t g_coils[125];           // 125 * 8 = 1000 bits
 static uint8_t g_discreteInputs[125];  // 125 * 8 = 1000 bits
 
 /**
- * @brief 位操作辅助函数
+ * @brief 位操作与地址转换辅助函数
  */
+static uint16_t getMappedRegisterIndex(uint16_t addr) {
+    if (addr >= 40001) return addr - 40001;
+    if (addr >= 30001) return addr - 30001;
+    if (addr >= 1) return addr - 1; // 1-based to 0-based
+    return addr; // 裸地址 0
+}
+
 static bool getBit(const uint8_t* buf, uint16_t idx) {
     if (idx >= 1000) return false;
     return (buf[idx / 8] >> (idx % 8)) & 0x01;
@@ -145,10 +195,7 @@ static void writeValueToPool(const SimulatorVariable& var) {
         return;
     }
 
-    uint16_t regIdx = 0;
-    if (var.address >= 40001) regIdx = var.address - 40001;
-    else if (var.address >= 30001) regIdx = var.address - 30001;
-    else regIdx = var.address - 1; // 默认
+    uint16_t regIdx = getMappedRegisterIndex(var.address);
     
     if (regIdx >= 1000) return;
 
@@ -190,10 +237,7 @@ static void syncSingleValueFromPool(SimulatorVariable& var) {
         return;
     }
 
-    uint16_t regIdx = 0;
-    if (var.address >= 40001) regIdx = var.address - 40001;
-    else if (var.address >= 30001) regIdx = var.address - 30001;
-    else regIdx = var.address - 1;
+    uint16_t regIdx = getMappedRegisterIndex(var.address);
 
     if (regIdx >= 1000) return;
 
@@ -296,7 +340,8 @@ static int handleModbusFrame(uint8_t* frame, int len, uint8_t* outResponse) {
     if (unitId != g_simConfig.unitId) return 0;
 
     uint8_t funcCode = frame[1];
-    uint16_t startAddr = (frame[2] << 8) | frame[3];
+    uint16_t rawAddr = (frame[2] << 8) | frame[3];
+    uint16_t startAddr = getMappedRegisterIndex(rawAddr); // 关键修复：地址自动映射
     uint16_t count = (frame[4] << 8) | frame[5];
 
     outResponse[0] = unitId;
@@ -377,6 +422,9 @@ static void handleRtuSerial() {
 
         if (len < 4) return;
         
+        // 记录入向原始报文（包括可能的其他地址报文）
+        addMonitorLog(false, 0, buf, len);
+
         uint16_t receivedCrc = (buf[len - 1] << 8) | buf[len - 2];
         if (calculateCRC(buf, len - 2) != receivedCrc) return;
 
@@ -386,6 +434,10 @@ static void handleRtuSerial() {
             uint16_t crc = calculateCRC(response, respLen);
             response[respLen++] = crc & 0xFF;
             response[respLen++] = crc >> 8;
+
+            // 记录出向报文
+            addMonitorLog(true, 0, response, respLen);
+
             RS485Serial.write(response, respLen);
             RS485Serial.flush();
         }
@@ -437,6 +489,9 @@ static void handleTcpServer() {
                     pdu[0] = mbap[6]; // Unit ID
                     g_simTcpClients[i].read(&pdu[1], len - 1);
 
+                    // 记录 TCP 入向（PDU 部分）
+                    addMonitorLog(false, 1, pdu, len);
+
                     uint8_t responsePdu[256];
                     int respPduLen = handleModbusFrame(pdu, len, responsePdu);
                     
@@ -446,6 +501,9 @@ static void handleTcpServer() {
                         respFrame[4] = (respPduLen >> 8);
                         respFrame[5] = (respPduLen & 0xFF);
                         memcpy(&respFrame[6], responsePdu, respPduLen);
+
+                        // 记录 TCP 出向
+                        addMonitorLog(true, 1, responsePdu, respPduLen);
                         
                         g_simTcpClients[i].write(respFrame, 6 + respPduLen);
                         g_simTcpClients[i].flush();
