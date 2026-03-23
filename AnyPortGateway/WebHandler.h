@@ -118,7 +118,7 @@ static void handleHttpRoot() {
       "d1ecf1;color:#0c5460;border:1px solid "
       "#bee5eb;vertical-align:middle;font-weight:bold}</style>";
   html += "</head><body>";
-  html += "<h1>AnyPort固件控制面板 v" FIRMWARE_VERSION "</h1>";
+  html += "<h1>AnyPort固件控制面板 v" FIRMWARE_VERSION "<span style='font-size:14px;color:#666;font-weight:normal;margin-left:15px'>© 2026 Hotwon-CD2-Hsieh</span></h1>";
   html += "<form id='mainForm' method='POST' action='/config'>";
 
   // 1. 顶部：WIFI 与 模式切换
