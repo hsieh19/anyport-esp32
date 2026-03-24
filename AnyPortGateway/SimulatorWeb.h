@@ -172,13 +172,12 @@ static void handleSetMode(WebServer& server) {
     if (server.hasArg("mode")) {
         uint8_t mode = server.arg("mode").toInt();
         extern Preferences g_prefs;
-        extern bool g_needRestart;
+        extern volatile bool g_needRestart;
         
         g_prefs.begin("anyport", false);
         g_prefs.putUChar("workMode", mode);
         g_prefs.end();
         
-        g_needRestart = true;
         server.send(200, "text/plain", "Mode updated, restarting...");
     } else {
         server.send(400, "text/plain", "Missing mode");

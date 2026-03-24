@@ -212,10 +212,9 @@ inline void pingForward(JsonDocument &doc, const String &sessionId) {
     // Ethernet 库内 connect 的默认超时就是 1000ms
     if (latency >= 1000) {
       resp["error"] = "timeout_unreachable";
-    } else if (latency < 100) {
-      resp["error"] = "socket_error";
     } else {
-      resp["error"] = "port_refused";
+      // 快速报错 (通常 < 500ms) 是典型的端口被拒绝 (RST)
+      resp["error"] = "connection_refused";
     }
   }
 
