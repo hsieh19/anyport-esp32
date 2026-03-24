@@ -11,7 +11,7 @@
 
 // 引用不再在本地定义，而是通过 Globals.h 统一管理
 extern WorkMode g_workMode;
-extern bool g_needRestart;
+extern volatile bool g_needRestart;
 
 /**
  * @brief 从站模拟器核心逻辑
@@ -72,13 +72,56 @@ struct SimulatorGlobalConfig {
     uint8_t unitId;      // 从站地址码
     bool tcpEnabled;
     uint16_t tcpPort;
+    bool monitorEnabled; // 是否开启报文监听
+    uint8_t monitorFilter; // 0:全线报文, 1:仅本站报文
 };
 
 // 共享寄存器池
 static const size_t MAX_SIM_VARIABLES = 32;
 static SimulatorVariable g_simVariables[MAX_SIM_VARIABLES];
 static size_t g_simVarCount = 0;
-static SimulatorGlobalConfig g_simConfig = {true, 9600, 1, 0, 8, 1, true, 502};
+static SimulatorGlobalConfig g_simConfig = {true, 9600, 1, 0, 8, 1, true, 502, false, 0};
+
+// 报文监听循环缓冲区
+struct MonitorLog {
+    unsigned long timestamp;
+    bool isOutgoing; // TX: true, RX: false
+    uint8_t type;    // 0: RTU, 1: TCP
+    uint8_t data[260];
+    size_t length;
+};
+static const size_t MAX_MONITOR_LOGS = 20;
+static MonitorLog g_monitorLogs[MAX_MONITOR_LOGS];
+static size_t g_monitorHead = 0;
+static size_t g_monitorCount = 0;
+
+static void addMonitorLog(bool isOutgoing, uint8_t type, const uint8_t* data, size_t len) {
+    if (!g_simConfig.monitorEnabled) return;
+    
+    // 过滤逻辑：本站报文过滤（针对本站地址或响应）
+    if (g_simConfig.monitorFilter == 1 && len > 0) {
+        if (data[0] != g_simConfig.unitId) return;
+    }
+
+    size_t index = (g_monitorHead + g_monitorCount) % MAX_MONITOR_LOGS;
+    g_monitorLogs[index].timestamp = millis();
+    g_monitorLogs[index].isOutgoing = isOutgoing;
+    g_monitorLogs[index].type = type;
+    g_monitorLogs[index].length = (len > 260) ? 260 : len;
+    memcpy(g_monitorLogs[index].data, data, g_monitorLogs[index].length);
+
+    if (g_monitorCount < MAX_MONITOR_LOGS) {
+        g_monitorCount++;
+    } else {
+        g_monitorHead = (g_monitorHead + 1) % MAX_MONITOR_LOGS;
+    }
+}
+
+// 清除监听日志
+static void clearMonitorLogs() {
+    g_monitorHead = 0;
+    g_monitorCount = 0;
+}
 
 // Holding / Input Register 缓冲区 (3xxxx / 4xxxx)
 static uint16_t g_holdingRegisters[1000]; 
@@ -88,8 +131,68 @@ static uint8_t g_coils[125];           // 125 * 8 = 1000 bits
 static uint8_t g_discreteInputs[125];  // 125 * 8 = 1000 bits
 
 /**
- * @brief 位操作辅助函数
+ * @brief 位操作与地址转换辅助函数
  */
+static uint16_t getMappedRegisterIndex(uint16_t addr) {
+    if (addr >= 40001) return addr - 40001;
+    if (addr >= 30001) return addr - 30001;
+    if (addr >= 1) return addr - 1; // 1-based to 0-based
+    return addr; // 裸地址 0
+}
+
+/**
+ * @brief 根据数据类型获取占用的寄存器数量 (16-bit counts)
+ */
+static uint16_t getDataTypeRegCount(DataType t) {
+    switch (t) {
+        case DataType::INT32:
+        case DataType::UINT32:
+        case DataType::FLOAT32:
+            return 2;
+        case DataType::STRING:
+            return 16; // 32 bytes
+        default:
+            return 1;
+    }
+}
+
+/**
+ * @brief 检查某个内部池索引是否对应已定义的变量
+ */
+static bool isInternalIndexDefined(uint16_t idx, bool isCoil) {
+    for (size_t i = 0; i < g_simVarCount; i++) {
+        uint16_t vIdx = getMappedRegisterIndex(g_simVariables[i].address);
+        bool vIsCoil = (g_simVariables[i].type == DataType::BIT);
+        if (vIsCoil != isCoil) continue;
+        
+        uint16_t count = getDataTypeRegCount(g_simVariables[i].type);
+        if (idx >= vIdx && idx < vIdx + count) return true;
+    }
+    return false;
+}
+
+/**
+ * @brief 检查请求的寄存器范围是否全部属于已定义变量
+ * @return 0: 全部定义, 2: 包含未定义地址 (Illegal Data Address)
+ */
+static uint8_t checkAddressRange(uint16_t start, uint16_t count, bool isCoil) {
+    if (count == 0 || start + count > 1000) return 02; // 异常码 02: 非法地址
+    for (uint16_t i = 0; i < count; i++) {
+        if (!isInternalIndexDefined(start + i, isCoil)) return 02;
+    }
+    return 0; // OK
+}
+
+/**
+ * @brief 生成 Modbus 异常响应
+ */
+static int makeExceptionResponse(uint8_t unitId, uint8_t funcCode, uint8_t exceptionCode, uint8_t* out) {
+    out[0] = unitId;
+    out[1] = funcCode | 0x80;
+    out[2] = exceptionCode;
+    return 3;
+}
+
 static bool getBit(const uint8_t* buf, uint16_t idx) {
     if (idx >= 1000) return false;
     return (buf[idx / 8] >> (idx % 8)) & 0x01;
@@ -145,10 +248,7 @@ static void writeValueToPool(const SimulatorVariable& var) {
         return;
     }
 
-    uint16_t regIdx = 0;
-    if (var.address >= 40001) regIdx = var.address - 40001;
-    else if (var.address >= 30001) regIdx = var.address - 30001;
-    else regIdx = var.address - 1; // 默认
+    uint16_t regIdx = getMappedRegisterIndex(var.address);
     
     if (regIdx >= 1000) return;
 
@@ -190,10 +290,7 @@ static void syncSingleValueFromPool(SimulatorVariable& var) {
         return;
     }
 
-    uint16_t regIdx = 0;
-    if (var.address >= 40001) regIdx = var.address - 40001;
-    else if (var.address >= 30001) regIdx = var.address - 30001;
-    else regIdx = var.address - 1;
+    uint16_t regIdx = getMappedRegisterIndex(var.address);
 
     if (regIdx >= 1000) return;
 
@@ -296,14 +393,17 @@ static int handleModbusFrame(uint8_t* frame, int len, uint8_t* outResponse) {
     if (unitId != g_simConfig.unitId) return 0;
 
     uint8_t funcCode = frame[1];
-    uint16_t startAddr = (frame[2] << 8) | frame[3];
+    uint16_t rawAddr = (frame[2] << 8) | frame[3];
+    uint16_t startAddr = getMappedRegisterIndex(rawAddr); // 关键修复：地址自动映射
     uint16_t count = (frame[4] << 8) | frame[5];
 
     outResponse[0] = unitId;
     outResponse[1] = funcCode;
 
     if (funcCode == 0x01 || funcCode == 0x02) { // Read Coils / Discrete Inputs
-        if (startAddr + count > 1000) return 0;
+        uint8_t exc = checkAddressRange(startAddr, count, true);
+        if (exc != 0) return makeExceptionResponse(unitId, funcCode, exc, outResponse);
+
         uint8_t* pool = (funcCode == 0x01) ? g_coils : g_discreteInputs;
         uint8_t byteCount = (count + 7) / 8;
         outResponse[2] = byteCount;
@@ -316,7 +416,9 @@ static int handleModbusFrame(uint8_t* frame, int len, uint8_t* outResponse) {
         return 3 + byteCount;
     }
     else if (funcCode == 0x03 || funcCode == 0x04) { // Read Holding/Input Registers
-        if (startAddr + count > 1000) return 0; 
+        uint8_t exc = checkAddressRange(startAddr, count, false);
+        if (exc != 0) return makeExceptionResponse(unitId, funcCode, exc, outResponse);
+
         outResponse[2] = count * 2;
         for (int i = 0; i < count; i++) {
             uint16_t val = g_holdingRegisters[startAddr + i];
@@ -326,14 +428,18 @@ static int handleModbusFrame(uint8_t* frame, int len, uint8_t* outResponse) {
         return 3 + count * 2;
     } 
     else if (funcCode == 0x05) { // Write Single Coil
-        if (startAddr >= 1000) return 0;
+        if (checkAddressRange(startAddr, 1, true) != 0) 
+            return makeExceptionResponse(unitId, funcCode, 02, outResponse);
+            
         bool val = (frame[4] == 0xFF); // 0xFF00 is ON, 0x0000 is OFF
         setBit(g_coils, startAddr, val);
         memcpy(&outResponse[2], &frame[2], 4);
         return 6;
     }
     else if (funcCode == 0x0F) { // Write Multiple Coils
-        if (startAddr + count > 1000) return 0;
+        uint8_t exc = checkAddressRange(startAddr, count, true);
+        if (exc != 0) return makeExceptionResponse(unitId, funcCode, exc, outResponse);
+
         uint8_t byteCount = frame[6];
         for (int i = 0; i < count; i++) {
             bool val = (frame[7 + i / 8] >> (i % 8)) & 0x01;
@@ -343,13 +449,17 @@ static int handleModbusFrame(uint8_t* frame, int len, uint8_t* outResponse) {
         return 6;
     }
     else if (funcCode == 0x06) { // Write Single Register
-        if (startAddr >= 1000) return 0;
+        if (checkAddressRange(startAddr, 1, false) != 0)
+            return makeExceptionResponse(unitId, funcCode, 02, outResponse);
+
         g_holdingRegisters[startAddr] = (frame[4] << 8) | frame[5];
         memcpy(&outResponse[2], &frame[2], 4);
         return 6;
     }
     else if (funcCode == 0x10) { // Write Multiple Registers
-        if (startAddr + count > 1000) return 0;
+        uint8_t exc = checkAddressRange(startAddr, count, false);
+        if (exc != 0) return makeExceptionResponse(unitId, funcCode, exc, outResponse);
+
         for (int i = 0; i < count; i++) {
             g_holdingRegisters[startAddr + i] = (frame[7 + i * 2] << 8) | frame[8 + i * 2];
         }
@@ -377,6 +487,9 @@ static void handleRtuSerial() {
 
         if (len < 4) return;
         
+        // 记录入向原始报文（包括可能的其他地址报文）
+        addMonitorLog(false, 0, buf, len);
+
         uint16_t receivedCrc = (buf[len - 1] << 8) | buf[len - 2];
         if (calculateCRC(buf, len - 2) != receivedCrc) return;
 
@@ -386,6 +499,10 @@ static void handleRtuSerial() {
             uint16_t crc = calculateCRC(response, respLen);
             response[respLen++] = crc & 0xFF;
             response[respLen++] = crc >> 8;
+
+            // 记录出向报文
+            addMonitorLog(true, 0, response, respLen);
+
             RS485Serial.write(response, respLen);
             RS485Serial.flush();
         }
@@ -402,16 +519,18 @@ public:
     void begin() { EthernetServer::begin(); }
 };
 
-// Modbus TCP 服务对象
-static EspEthernetServer g_simTcpServer(502);
+// Modbus TCP 服务对象 (改为动态分配以支持运行期/重启后端口变更)
+static EspEthernetServer* g_simTcpServer = nullptr;
 static EthernetClient g_simTcpClients[4]; // 最多 4 个并发连接
 
 /**
  * @brief 处理 Modbus TCP 流量
  */
 static void handleTcpServer() {
+    if (!g_simTcpServer) return;
+    
     // 接受新连接
-    EthernetClient newClient = g_simTcpServer.accept();
+    EthernetClient newClient = g_simTcpServer->accept();
     if (newClient) {
         bool accepted = false;
         for (int i = 0; i < 4; i++) {
@@ -424,31 +543,51 @@ static void handleTcpServer() {
         if (!accepted) newClient.stop(); // 超过最大连接数
     }
 
-    // 处理现有连接
+    // 处理现有连接并回收资源
     for (int i = 0; i < 4; i++) {
-        if (g_simTcpClients[i] && g_simTcpClients[i].connected()) {
-            if (g_simTcpClients[i].available() >= 12) { // MBAP(7) + PDU(min 5)
+        if (g_simTcpClients[i]) {
+            if (!g_simTcpClients[i].connected()) {
+                g_simTcpClients[i].stop();
+                continue;
+            }
+            
+            if (g_simTcpClients[i].available() >= 7) { 
                 uint8_t mbap[7];
                 g_simTcpClients[i].read(mbap, 7);
                 
                 uint16_t len = (mbap[4] << 8) | mbap[5];
-                if (len > 0 && len < 250) {
+                if (len > 0 && len < 260) {
                     uint8_t pdu[256];
                     pdu[0] = mbap[6]; // Unit ID
-                    g_simTcpClients[i].read(&pdu[1], len - 1);
-
-                    uint8_t responsePdu[256];
-                    int respPduLen = handleModbusFrame(pdu, len, responsePdu);
                     
-                    if (respPduLen > 0) {
-                        uint8_t respFrame[263];
-                        memcpy(respFrame, mbap, 4); // Copy Transaction & Protocol ID
-                        respFrame[4] = (respPduLen >> 8);
-                        respFrame[5] = (respPduLen & 0xFF);
-                        memcpy(&respFrame[6], responsePdu, respPduLen);
+                    int pduGot = 1;
+                    unsigned long startWait = millis();
+                    while (pduGot < len && millis() - startWait < 50) {
+                        if (g_simTcpClients[i].available()) {
+                            pdu[pduGot++] = g_simTcpClients[i].read();
+                        }
+                    }
+
+                    if (pduGot == len) {
+                        uint8_t fullReq[263];
+                        memcpy(fullReq, mbap, 7);
+                        if (len > 1) memcpy(&fullReq[7], &pdu[1], len - 1);
+                        addMonitorLog(false, 1, fullReq, 6 + len);
+
+                        uint8_t responsePdu[256];
+                        int respPduLen = handleModbusFrame(pdu, len, responsePdu);
                         
-                        g_simTcpClients[i].write(respFrame, 6 + respPduLen);
-                        g_simTcpClients[i].flush();
+                        if (respPduLen > 0) {
+                            uint8_t respFrame[263];
+                            memcpy(respFrame, mbap, 4); 
+                            respFrame[4] = (respPduLen >> 8);
+                            respFrame[5] = (respPduLen & 0xFF);
+                            memcpy(&respFrame[6], responsePdu, respPduLen);
+
+                            g_simTcpClients[i].write(respFrame, 6 + respPduLen);
+                            g_simTcpClients[i].flush();
+                            addMonitorLog(true, 1, respFrame, 6 + respPduLen);
+                        }
                     }
                 }
             }
@@ -526,7 +665,10 @@ void simulatorLoop() {
         }
 
         if (g_simConfig.tcpEnabled) {
-            g_simTcpServer.begin(g_simConfig.tcpPort);
+            if (g_simTcpServer) delete g_simTcpServer;
+            g_simTcpServer = new EspEthernetServer(g_simConfig.tcpPort);
+            g_simTcpServer->begin();
+            APP_LOG("[Simulator] TCP Server started on port %d", g_simConfig.tcpPort);
         }
         netStarted = true;
     }

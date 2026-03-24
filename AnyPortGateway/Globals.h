@@ -44,7 +44,7 @@ static constexpr const char *MQTT_SITE_ID = "office";
 static constexpr const char *MQTT_GATEWAY_ID = "gateway-01";
 static const size_t MQTT_JSON_DOC_SIZE = 1024;
 
-#define FIRMWARE_VERSION "1.2.0"
+#define FIRMWARE_VERSION "1.2.2"
 
 static const uint32_t RS485_DEFAULT_BAUDRATE = 9600;
 static const uint8_t RS485_DEFAULT_DATABITS = 8;
@@ -112,7 +112,7 @@ extern NtpConfig g_ntpConfig;
 extern WebServer g_httpServer;
 extern uint8_t g_rtuRxBuffer[512];
 extern size_t g_rtuRxLength;
-extern bool g_needRestart;
+extern volatile bool g_needRestart;
 extern String g_mdnsName;
 extern uint32_t g_transBaud;
 extern uint8_t g_transDataBits;

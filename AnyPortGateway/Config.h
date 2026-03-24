@@ -32,7 +32,7 @@ uint8_t g_transStopBits = 1;
 WebServer g_httpServer(80);
 uint8_t g_rtuRxBuffer[512] __attribute__((aligned(4)));
 size_t g_rtuRxLength = 0;
-bool g_needRestart = false;
+volatile bool g_needRestart = false;
 #include <ESPmDNS.h>
 unsigned long g_lastHeartbeatMs = 0;
 

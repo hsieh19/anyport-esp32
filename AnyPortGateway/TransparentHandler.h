@@ -10,10 +10,10 @@
  */
 
 static void initTransparentMode() {
-  // 强制关闭系统调试输出
+  // 强制关闭系统调试输出，防止日志干扰透传
   Serial.setDebugOutput(false);
 
-  // 构建串口配置
+  // 1. 根据 Web 页面配置构建参数
   uint32_t config = SERIAL_8N1;
   if (g_transDataBits == 8) {
     if (g_transParity == 1)
@@ -31,6 +31,16 @@ static void initTransparentMode() {
       config = (g_transStopBits == 1) ? SERIAL_7N1 : SERIAL_7N2;
   }
 
+  // 2. 核心兼容性修复：根据硬件类型执行“手动同步”强制逻辑
+  // 经典款硬件：USB 通道实质是实体 UART0，物理上必须对齐波特率以忽略上位机波动干扰。
+#if !defined(ARDUINO_USB_CDC_ON_BOOT) || ARDUINO_USB_CDC_ON_BOOT == 0
+  if (g_transBaud != 115200 || config != SERIAL_8N1) {
+    Serial.begin(g_transBaud, config);
+  }
+#endif
+  // 简约款 C3：USB 是虚拟端口，忽略 Serial.begin 以避免断开死机（CDC 自动处理流量）。
+
+  // 3. 同步 RS485 (UART1) 侧
   RS485Serial.flush();
   RS485Serial.end();
   delay(10);
