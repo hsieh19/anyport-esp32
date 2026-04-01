@@ -72,6 +72,10 @@ inline bool buildRs485Config(uint32_t requestedBaud, uint8_t stopBits,
   return true;
 }
 
+// TCP 连接复用：记录上次连接的目标，避免反复断开重连耗尽 W5500 的 4 个硬件 socket
+static IPAddress g_lastTcpTargetIp;
+static uint16_t g_lastTcpTargetPort = 0;
+
 inline bool modbusTcpForward(JsonDocument &doc, JsonDocument &resp) {
   if (!doc.containsKey("tcpTarget") || !doc.containsKey("hex")) {
     resp["message"] = "missing_tcp_target_or_hex";
@@ -97,14 +101,28 @@ inline bool modbusTcpForward(JsonDocument &doc, JsonDocument &resp) {
     return false;
   }
 
-  if (g_ethClient.connected()) {
+  // --- 连接复用逻辑 ---
+  bool needReconnect = false;
+  if (!g_ethClient.connected()) {
+    needReconnect = true;
+  } else if (targetIp != g_lastTcpTargetIp || port != g_lastTcpTargetPort) {
+    // 目标变更，关闭旧连接
     g_ethClient.stop();
+    delay(50);  // 给 W5500 时间释放 socket
+    needReconnect = true;
   }
 
-  if (!g_ethClient.connect(targetIp, port)) {
-    resp["message"] = "tcp_connect_failed";
-    return false;
+  if (needReconnect) {
+    if (!g_ethClient.connect(targetIp, port)) {
+      resp["message"] = "tcp_connect_failed";
+      return false;
+    }
+    g_lastTcpTargetIp = targetIp;
+    g_lastTcpTargetPort = port;
   }
+
+  // 清空接收缓冲区中可能残留的旧数据
+  while (g_ethClient.available()) g_ethClient.read();
 
   g_ethClient.write(buffer, length);
   g_ethClient.flush();
@@ -128,7 +146,7 @@ inline bool modbusTcpForward(JsonDocument &doc, JsonDocument &resp) {
     delay(5);
   }
 
-  g_ethClient.stop();
+  // 注意：不再调用 g_ethClient.stop()，保持连接复用
 
   if (offset == 0) {
     resp["message"] = "tcp_timeout_or_empty";

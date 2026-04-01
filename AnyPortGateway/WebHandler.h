@@ -124,8 +124,7 @@ static void handleHttpRoot() {
       "d1ecf1;color:#0c5460;border:1px solid "
       "#bee5eb;vertical-align:middle;font-weight:bold}</style>";
   html += "</head><body>";
-  html += "<h1>AnyPort固件控制面板 v" FIRMWARE_VERSION
-          "<span "
+  html += "<h1>AnyPort固件控制面板 v" FIRMWARE_VERSION "<span "
           "style='font-size:14px;color:#666;font-weight:normal;margin-left:"
           "15px'>© 2026 Hotwon-CD2-Hsieh</span></h1>";
   html += "<form id='mainForm' method='POST' action='/config'>";
@@ -158,13 +157,19 @@ static void handleHttpRoot() {
   html += "<option value='2'" +
           String(g_workMode == WorkMode::TRANSPARENT ? " selected" : "") +
           ">USB 转 RS485 透传模式</option>";
+  html += "<option value='3'" +
+          String(g_workMode == WorkMode::BRIDGE ? " selected" : "") +
+          ">协议互转模式</option>";
   html += "</select>";
-  html += "<span class='badge'>当前运行模式: " +
-          String(g_workMode == WorkMode::GATEWAY
-                     ? "MQTT 网关"
-                     : (g_workMode == WorkMode::SIMULATOR ? "从站模拟器"
-                                                          : "USB 透传")) +
-          "</span>";
+  html +=
+      "<span class='badge'>当前运行模式: " +
+      String(g_workMode == WorkMode::GATEWAY
+                 ? "MQTT 网关"
+                 : (g_workMode == WorkMode::SIMULATOR
+                        ? "从站模拟器"
+                        : (g_workMode == WorkMode::TRANSPARENT ? "USB 透传"
+                                                               : "协议互转"))) +
+      "</span>";
   html += "</div>";
 
   // 2. 模式 A: 网关配置
@@ -337,6 +342,95 @@ static void handleHttpRoot() {
           ">2位</option></select><br>";
   html += "</div>";
 
+  // 4.5 模式 D: 协议互转配置
+  html += "<div id='secBridge' class='card' style='display:" +
+          String(g_workMode == WorkMode::BRIDGE ? "block" : "none") + "'>";
+  html += "<h2>协议互转配置 (Modbus TCP <-> RTU)</h2>";
+  html += "<h3>转换方向</h3>";
+  html += "<label>转换方向:</label><select name='bDir' "
+          "onchange='uiToggleBridge(this.value)'>";
+  html += "<option value='0' " +
+          String(g_bridgeConfig.direction == 0 ? "selected" : "") +
+          ">以太网主站 -> 访问串口从站 (TCP 服务模式)</option>";
+  html += "<option value='1' " +
+          String(g_bridgeConfig.direction == 1 ? "selected" : "") +
+          ">串口主站 -> 访问网络从站 (RTU 监听模式)</option>";
+  html += "</select><br>";
+
+  html += "<h3>转换模式</h3>";
+  html += "<label>转换方式:</label><select name='bMode' "
+          "onchange='uiToggleBridgeMode(this.value)'>";
+  html += "<option value='0' " +
+          String(g_bridgeConfig.bridgeMode == 0 ? "selected" : "") +
+          ">总线级透明传输 (Bus-level)</option>";
+  html += "<option value='1' " +
+          String(g_bridgeConfig.bridgeMode == 1 ? "selected" : "") +
+          ">单个设备地址映射 (Single Device)</option>";
+  html += "</select>";
+  html += "<span "
+          "style='color:#666;font-size:13px;margin-left:5px'>*"
+          "单个设备地址映射会忽略主站下发的 ID 并强制改写为下方 ID</span><br>";
+
+  html += "<div id='bridgeSlaveId' style='display:" +
+          String(g_bridgeConfig.bridgeMode == 1 ? "block" : "none") + "'>";
+  html += "<label>从站 ID (1-247):</label><input name='bSlaveId' type='number' "
+          "value='" +
+          String(g_bridgeConfig.slaveId) +
+          "'><span style='color:#666;font-size:13px;margin-left:5px'>*此 ID "
+          "必须与 RS485 总线上串口设备的真实地址一致</span><br>";
+  html += "</div>";
+
+  html += "<h3>网络参数</h3>";
+
+  html += "<div id='bridgeTcpServer' style='display:" +
+          String(g_bridgeConfig.direction == 0 ? "block" : "none") + "'>";
+  html +=
+      "<label>监听端口:</label><input name='bTcpPort' type='number' value='" +
+      String(g_bridgeConfig.tcpPort) + "'><br>";
+  html += "</div>";
+
+  html += "<div id='bridgeTcpClient' style='display:" +
+          String(g_bridgeConfig.direction == 1 ? "block" : "none") + "'>";
+  html += "<label>目标 IP:</label><input name='bTargetIp' value='" +
+          g_bridgeConfig.targetIp + "'><br>";
+  html += "<label>目标端口:</label><input name='bTargetPort' type='number' "
+          "value='" +
+          String(g_bridgeConfig.targetPort) + "'><br>";
+  html += "</div>";
+
+  html += "<h3>RS485 串口参数</h3>";
+  html += "<label>波特率:</label><select name='bBaud'>";
+  for (int i = 0; i < 5; i++)
+    html += "<option value='" + String(bauds_t[i]) + "'" +
+            (g_bridgeConfig.baud == bauds_t[i] ? " selected" : "") + ">" +
+            String(bauds_t[i]) + "</option>";
+  html += "</select><br>";
+  html += "<label>数据位:</label><select name='bData'>";
+  html += "<option value='8' " +
+          String(g_bridgeConfig.dataBits == 8 ? "selected" : "") +
+          ">8位</option>";
+  html += "<option value='7' " +
+          String(g_bridgeConfig.dataBits == 7 ? "selected" : "") +
+          ">7位</option></select><br>";
+  html += "<label>校验位:</label><select name='bParity'>";
+  html += "<option value='0' " +
+          String(g_bridgeConfig.parity == 0 ? "selected" : "") +
+          ">None</option>";
+  html += "<option value='1' " +
+          String(g_bridgeConfig.parity == 1 ? "selected" : "") +
+          ">Even</option>";
+  html += "<option value='2' " +
+          String(g_bridgeConfig.parity == 2 ? "selected" : "") +
+          ">Odd</option></select><br>";
+  html += "<label>停止位:</label><select name='bStop'>";
+  html += "<option value='1' " +
+          String(g_bridgeConfig.stopBits == 1 ? "selected" : "") +
+          ">1位</option>";
+  html += "<option value='2' " +
+          String(g_bridgeConfig.stopBits == 2 ? "selected" : "") +
+          ">2位</option></select><br>";
+  html += "</div>";
+
   // 5. 寄存器配置区
   html += "<div id='secRegisters' class='card' style='display:" +
           String(g_workMode == WorkMode::SIMULATOR ? "block" : "none") + "'>";
@@ -382,7 +476,17 @@ static void handleHttpRoot() {
       "document.getElementById('secMonitor').style.display=(m=='1'?'"
       "block':'none'); "
       "document.getElementById('secTransparent').style.display=(m=='2'?'"
+      "block':'none'); "
+      "document.getElementById('secBridge').style.display=(m=='3'?'"
       "block':'none'); }";
+  html += "function uiToggleBridge(d){ "
+          "document.getElementById('bridgeTcpServer').style.display=(d=='0'?'"
+          "block':'none'); "
+          "document.getElementById('bridgeTcpClient').style.display=(d=='1'?'"
+          "block':'none'); }";
+  html += "function uiToggleBridgeMode(m){ "
+          "document.getElementById('bridgeSlaveId').style.display=(m=='1'?'"
+          "block':'none'); }";
   html += "function "
           "addRegRow(d={addr:40001,name:'',targetVal:0,val:0,type:4,endian:0,"
           "isDyn:false,dynInterval:1,dynMode:0,min:0,max:100}){";
@@ -631,6 +735,32 @@ static void handleHttpConfig() {
     g_prefs.putUChar("tData", g_transDataBits);
     g_prefs.putUChar("tParity", g_transParity);
     g_prefs.putUChar("tStop", g_transStopBits);
+  }
+
+  // Bridge 模式保存
+  String bDir = g_httpServer.arg("bDir");
+  if (bDir.length() > 0) {
+    g_bridgeConfig.direction = bDir.toInt();
+    g_bridgeConfig.bridgeMode = g_httpServer.arg("bMode").toInt();
+    g_bridgeConfig.slaveId = g_httpServer.arg("bSlaveId").toInt();
+    g_bridgeConfig.tcpPort = g_httpServer.arg("bTcpPort").toInt();
+    g_bridgeConfig.targetIp = g_httpServer.arg("bTargetIp");
+    g_bridgeConfig.targetPort = g_httpServer.arg("bTargetPort").toInt();
+    g_bridgeConfig.baud = g_httpServer.arg("bBaud").toInt();
+    g_bridgeConfig.dataBits = g_httpServer.arg("bData").toInt();
+    g_bridgeConfig.parity = g_httpServer.arg("bParity").toInt();
+    g_bridgeConfig.stopBits = g_httpServer.arg("bStop").toInt();
+
+    g_prefs.putUChar("bDir", g_bridgeConfig.direction);
+    g_prefs.putUChar("bMode", g_bridgeConfig.bridgeMode);
+    g_prefs.putUChar("bSlaveId", g_bridgeConfig.slaveId);
+    g_prefs.putUShort("bTcpPort", g_bridgeConfig.tcpPort);
+    g_prefs.putString("bTargetIp", g_bridgeConfig.targetIp);
+    g_prefs.putUShort("bTargetPort", g_bridgeConfig.targetPort);
+    g_prefs.putUInt("bBaud", g_bridgeConfig.baud);
+    g_prefs.putUChar("bData", g_bridgeConfig.dataBits);
+    g_prefs.putUChar("bParity", g_bridgeConfig.parity);
+    g_prefs.putUChar("bStop", g_bridgeConfig.stopBits);
   }
 
   g_prefs.end();

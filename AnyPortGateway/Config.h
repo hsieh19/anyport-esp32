@@ -29,6 +29,8 @@ uint8_t g_transDataBits = 8;
 uint8_t g_transParity = 0; // 0:None, 1:Even, 2:Odd
 uint8_t g_transStopBits = 1;
 
+BridgeConfig g_bridgeConfig = {0, 0, 1, 502, "", 502, 9600, 1, 0, 8};
+
 WebServer g_httpServer(80);
 uint8_t g_rtuRxBuffer[512] __attribute__((aligned(4)));
 size_t g_rtuRxLength = 0;
@@ -45,6 +47,7 @@ unsigned long g_lastHeartbeatMs = 0;
 #include "WebHandler.h"
 #include "SimulatorCore.h"
 #include "SimulatorWeb.h"
+#include "BridgeHandler.h"
 #include "TransparentHandler.h"
 
 // -----------------------
@@ -105,6 +108,18 @@ static void loadPersistentConfig() {
     g_transParity = g_prefs.getUChar("tParity", 0);
     g_transStopBits = g_prefs.getUChar("tStop", 1);
     
+    // Bridge 加载
+    g_bridgeConfig.direction = g_prefs.getUChar("bDir", 0);
+    g_bridgeConfig.bridgeMode = g_prefs.getUChar("bMode", 0);
+    g_bridgeConfig.slaveId = g_prefs.getUChar("bSlaveId", 1);
+    g_bridgeConfig.tcpPort = g_prefs.getUShort("bTcpPort", 502);
+    g_bridgeConfig.targetIp = g_prefs.getString("bTargetIp", "192.168.1.100");
+    g_bridgeConfig.targetPort = g_prefs.getUShort("bTargetPort", 502);
+    g_bridgeConfig.baud = g_prefs.getUInt("bBaud", 9600);
+    g_bridgeConfig.dataBits = g_prefs.getUChar("bData", 8);
+    g_bridgeConfig.parity = g_prefs.getUChar("bParity", 0);
+    g_bridgeConfig.stopBits = g_prefs.getUChar("bStop", 1);
+
     g_prefs.end();
 }
 
@@ -142,6 +157,8 @@ void anyportGatewayLoop() {
         simulatorLoop();
     } else if (g_workMode == WorkMode::TRANSPARENT) {
         loopTransparentMode();
+    } else if (g_workMode == WorkMode::BRIDGE) {
+        bridgeLoop();
     }
 
     g_httpServer.handleClient();

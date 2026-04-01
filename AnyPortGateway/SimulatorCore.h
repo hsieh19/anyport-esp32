@@ -509,15 +509,7 @@ static void handleRtuSerial() {
     }
 }
 
-// 针对 ESP32 核心的 EthernetServer 兼容性封装
-// 修复 "cannot declare variable to be of abstract type" 错误
-class EspEthernetServer : public EthernetServer {
-public:
-    EspEthernetServer(uint16_t port) : EthernetServer(port) {}
-    // 显式调用父类的 begin()，并实现 ESP32 Server 接口要求的虚函数以消除抽象类报错
-    void begin(uint16_t port) override { EthernetServer::begin(); } 
-    void begin() { EthernetServer::begin(); }
-};
+// 使用 Globals.h 中定义的 EspEthernetServer
 
 // Modbus TCP 服务对象 (改为动态分配以支持运行期/重启后端口变更)
 static EspEthernetServer* g_simTcpServer = nullptr;

@@ -11,5 +11,6 @@
 enum class WorkMode : uint8_t {
   GATEWAY = 0,   // MQTT 网关模式
   SIMULATOR = 1, // 从站模拟器模式
-  TRANSPARENT = 2 // USB 转 RS485 透传模式
+  TRANSPARENT = 2, // USB 转 RS485 透传模式
+  BRIDGE = 3      // 协议互转模式 (Modbus TCP <-> RTU)
 };
