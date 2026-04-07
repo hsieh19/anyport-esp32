@@ -47,7 +47,7 @@ enum class Endianness : uint8_t {
 
 // 寄存器变量定义结构体
 struct SimulatorVariable {
-    uint16_t address;      // PLC 地址 (Base 1, 如 40001)
+    uint32_t address;      // PLC 地址 (Base 1, 如 40001 或 400001)
     char name[32];         // 变量名称
     DataType type;         // 数据类型
     Endianness endian;     // 字节序
@@ -124,20 +124,31 @@ static void clearMonitorLogs() {
 }
 
 // Holding / Input Register 缓冲区 (3xxxx / 4xxxx)
-static uint16_t g_holdingRegisters[1000]; 
+static uint16_t g_holdingRegisters[20000]; 
 
 // Coils / Discrete Inputs 缓冲区 (0xxxx / 1xxxx)
-static uint8_t g_coils[125];           // 125 * 8 = 1000 bits
-static uint8_t g_discreteInputs[125];  // 125 * 8 = 1000 bits
+static uint8_t g_coils[2500];           // 2500 * 8 = 20000 bits
+static uint8_t g_discreteInputs[2500];  // 2500 * 8 = 20000 bits
 
 /**
  * @brief 位操作与地址转换辅助函数
  */
-static uint16_t getMappedRegisterIndex(uint16_t addr) {
-    if (addr >= 40001) return addr - 40001;
-    if (addr >= 30001) return addr - 30001;
-    if (addr >= 1) return addr - 1; // 1-based to 0-based
-    return addr; // 裸地址 0
+// 仅用于将用户配置的 PLC 地址 (Base 1) 转换为内部 0-based 偏移量
+static uint16_t getMappedRegisterIndex(uint32_t addr) {
+    // 6 位地址段 (100001-465535)
+    if (addr >= 400001) return (uint16_t)(addr - 400001);
+    if (addr >= 300001) return (uint16_t)(addr - 300001);
+    if (addr >= 100001) return (uint16_t)(addr - 100001);
+
+    // 5 位地址段 (10001-49999)
+    if (addr >= 40001 && addr <= 49999)  return (uint16_t)(addr - 40001);
+    if (addr >= 30001 && addr <= 39999)  return (uint16_t)(addr - 30001);
+    if (addr >= 10001 && addr <= 19999)  return (uint16_t)(addr - 10001);
+
+    // 标准 0xxxx 线圈地址处理 (00001 -> 0)
+    if (addr >= 1 && addr <= 9999)      return (uint16_t)(addr - 1); 
+
+    return (uint16_t)addr; 
 }
 
 /**
@@ -176,7 +187,8 @@ static bool isInternalIndexDefined(uint16_t idx, bool isCoil) {
  * @return 0: 全部定义, 2: 包含未定义地址 (Illegal Data Address)
  */
 static uint8_t checkAddressRange(uint16_t start, uint16_t count, bool isCoil) {
-    if (count == 0 || start + count > 1000) return 02; // 异常码 02: 非法地址
+    uint16_t limit = isCoil ? 20000 : 20000;
+    if (count == 0 || start + count > limit) return 02; // 异常码 02: 非法地址
     for (uint16_t i = 0; i < count; i++) {
         if (!isInternalIndexDefined(start + i, isCoil)) return 02;
     }
@@ -194,11 +206,11 @@ static int makeExceptionResponse(uint8_t unitId, uint8_t funcCode, uint8_t excep
 }
 
 static bool getBit(const uint8_t* buf, uint16_t idx) {
-    if (idx >= 1000) return false;
+    if (idx >= 20000) return false;
     return (buf[idx / 8] >> (idx % 8)) & 0x01;
 }
 static void setBit(uint8_t* buf, uint16_t idx, bool val) {
-    if (idx >= 1000) return;
+    if (idx >= 20000) return;
     if (val) {
         buf[idx / 8] |= (1 << (idx % 8));
     } else {
@@ -238,26 +250,31 @@ static void swapBytes(uint8_t* p, Endianness endian, size_t size) {
 static void writeValueToPool(const SimulatorVariable& var) {
     if (var.type == DataType::BIT) {
         uint16_t bitIdx = 0;
-        if (var.address >= 1 && var.address <= 1000) { // 0xxxx (Coils)
-            bitIdx = var.address - 1;
-            setBit(g_coils, bitIdx, var.currentValue > 0.5f);
-        } else if (var.address >= 10001 && var.address <= 11000) { // 1xxxx (Discrete)
+        uint8_t* pool = g_coils;
+        if (var.address >= 100001 && var.address <= 120000) {
+            bitIdx = var.address - 100001;
+            pool = g_discreteInputs;
+        } else if (var.address >= 10001 && var.address <= 30000) {
             bitIdx = var.address - 10001;
-            setBit(g_discreteInputs, bitIdx, var.currentValue > 0.5f);
+            pool = g_discreteInputs;
+        } else {
+            bitIdx = (var.address >= 1 && var.address <= 20000) ? (var.address - 1) : 0;
+            pool = g_coils;
         }
+        setBit(pool, bitIdx, var.currentValue > 0.5f);
         return;
     }
 
     uint16_t regIdx = getMappedRegisterIndex(var.address);
     
-    if (regIdx >= 1000) return;
+    if (regIdx >= 20000) return;
 
     if (var.type == DataType::INT16 || var.type == DataType::UINT16) {
         uint16_t val = static_cast<uint16_t>(var.currentValue);
         swapBytes((uint8_t*)&val, var.endian, 2);
         g_holdingRegisters[regIdx] = val;
     } else if (var.type == DataType::INT32 || var.type == DataType::UINT32 || var.type == DataType::FLOAT32) {
-        if (regIdx + 1 >= 1000) return;
+        if (regIdx + 1 >= 20000) return;
         uint32_t val32;
         if (var.type == DataType::FLOAT32) {
             memcpy(&val32, &var.currentValue, 4);
@@ -270,7 +287,7 @@ static void writeValueToPool(const SimulatorVariable& var) {
     } else if (var.type == DataType::STRING) {
         size_t len = strlen(var.currentStr);
         size_t regCount = (len + 1) / 2;
-        for (size_t i = 0; i < regCount && (regIdx + i) < 1000; i++) {
+        for (size_t i = 0; i < regCount && (regIdx + i) < 20000; i++) {
             uint16_t val = (var.currentStr[i * 2] << 8) | (var.currentStr[i * 2 + 1] & 0xFF);
             // 字符串通常不应用 ABCD 以外的复杂交换，保持标准序
             g_holdingRegisters[regIdx + i] = val;
@@ -283,16 +300,18 @@ static void writeValueToPool(const SimulatorVariable& var) {
  */
 static void syncSingleValueFromPool(SimulatorVariable& var) {
     if (var.type == DataType::BIT) {
-        if (var.address >= 1 && var.address <= 1000)
-            var.currentValue = getBit(g_coils, var.address - 1) ? 1.0f : 0.0f;
-        else if (var.address >= 10001 && var.address <= 11000)
+        if (var.address >= 100001 && var.address <= 120000)
+            var.currentValue = getBit(g_discreteInputs, var.address - 100001) ? 1.0f : 0.0f;
+        else if (var.address >= 10001 && var.address <= 30000)
             var.currentValue = getBit(g_discreteInputs, var.address - 10001) ? 1.0f : 0.0f;
+        else
+            var.currentValue = getBit(g_coils, (var.address >= 1 && var.address <= 20000) ? (var.address - 1) : 0) ? 1.0f : 0.0f;
         return;
     }
 
     uint16_t regIdx = getMappedRegisterIndex(var.address);
 
-    if (regIdx >= 1000) return;
+    if (regIdx >= 20000) return;
 
     if (var.type == DataType::INT16 || var.type == DataType::UINT16) {
         uint16_t val = g_holdingRegisters[regIdx];
@@ -300,7 +319,7 @@ static void syncSingleValueFromPool(SimulatorVariable& var) {
         if (var.type == DataType::INT16) var.currentValue = (float)(int16_t)val;
         else var.currentValue = (float)val;
     } else if (var.type == DataType::INT32 || var.type == DataType::UINT32 || var.type == DataType::FLOAT32) {
-        if (regIdx + 1 >= 1000) return;
+        if (regIdx + 1 >= 20000) return;
         uint32_t val32 = ((uint32_t)g_holdingRegisters[regIdx] << 16) | g_holdingRegisters[regIdx + 1];
         swapBytes((uint8_t*)&val32, var.endian, 4);
         if (var.type == DataType::FLOAT32) memcpy(&var.currentValue, &val32, 4);
@@ -393,8 +412,8 @@ static int handleModbusFrame(uint8_t* frame, int len, uint8_t* outResponse) {
     if (unitId != g_simConfig.unitId) return 0;
 
     uint8_t funcCode = frame[1];
-    uint16_t rawAddr = (frame[2] << 8) | frame[3];
-    uint16_t startAddr = getMappedRegisterIndex(rawAddr); // 关键修复：地址自动映射
+    uint16_t ra = (frame[2] << 8) | frame[3]; // ra = raw offset from master
+    uint16_t startAddr = ra;                  // Directly use offset
     uint16_t count = (frame[4] << 8) | frame[5];
 
     outResponse[0] = unitId;
@@ -600,7 +619,7 @@ static void loadSimConfig() {
 
     // 加载寄存器变量
     size_t size = g_prefs.getBytesLength("simVars");
-    if (size > 0 && size <= sizeof(g_simVariables)) {
+    if (size > 0 && (size % sizeof(SimulatorVariable) == 0) && size <= sizeof(g_simVariables)) {
         g_prefs.getBytes("simVars", g_simVariables, size);
         g_simVarCount = size / sizeof(SimulatorVariable);
         
@@ -611,7 +630,10 @@ static void loadSimConfig() {
             writeValueToPool(g_simVariables[i]);
         }
     } else {
-        // 如果键不存在或长度为 0，确保计数清零
+        if (size > 0) {
+            APP_LOG("[Simulator] Config size mismatch (%d vs %d), clearing old settings", size, sizeof(SimulatorVariable));
+            g_prefs.remove("simVars");
+        }
         g_simVarCount = 0;
     }
     g_prefs.end();

@@ -435,9 +435,10 @@ static void handleHttpRoot() {
   html += "<div id='secRegisters' class='card' style='display:" +
           String(g_workMode == WorkMode::SIMULATOR ? "block" : "none") + "'>";
   html += "<h2>寄存器与协议对象定义 (支持 0x/1x/3x/4x)</h2>";
+  html += "<p style='color:#336699;font-size:13px;background:#e7f3ff;padding:8px;border-radius:4px;border:1px solid #b8daff'><b>💡 配置指南：</b>上位机 (Master) 推荐设置为 <b>Base-1</b> 模式，以直接映射左侧的 <b>PLC 地址</b>；若您的上位机软件固定为 <b>Base-0</b> 模式，请对照右侧的 <b>数据地址</b> 进行访问。</p>";
   html +=
       "<table "
-      "id='regTable'><tr><th>地址</th><th>名称</th><th>设定值</th><th>状态值</"
+      "id='regTable'><tr><th>PLC 地址<br>(Base-1)</th><th>数据地址<br>(Base-0)</th><th>名称</th><th>设定值</th><th>状态值</"
       "th><th>类型</th><th>字节序</th><th>动态</th><th>动态时间(s)</"
       "th><th>动态属性</th><th>模拟范围</th><th>操作</th></tr></table>";
   html += "<button type='button' style='margin-top:10px' "
@@ -490,19 +491,30 @@ static void handleHttpRoot() {
   html += "function "
           "addRegRow(d={addr:40001,name:'',targetVal:0,val:0,type:4,endian:0,"
           "isDyn:false,dynInterval:1,dynMode:0,min:0,max:100}){";
-  html += " const padAddr=(a)=>(a+'').padStart(5,'0');";
+  html += " const padAddr=(a)=>(a+'').padStart(6,'0');";
+  html += " const getOffset=(a)=>{ let v=parseInt(a); let o=0; "
+          "if(v>=400001)o=v-400001; else if(v>=300001)o=v-300001; "
+          "else if(v>=100001)o=v-100001; "
+          "else if(v>=40001&&v<=49999)o=v-40001; "
+          "else if(v>=30001&&v<=39999)o=v-30001; "
+          "else if(v>=10001&&v<=19999)o=v-10001; "
+          "else if(v>=1&&v<=9999)o=v-1; else o=v; "
+          "if(isNaN(o))return '--'; "
+          "return o.toString(16).toUpperCase().padStart(4,'0')+'H ('+o+')'; };";
   html += " let t=document.getElementById('regTable'); let r=t.insertRow(-1); "
           "r.id='reg-'+d.addr; ";
   html +=
       " r.innerHTML=`<td><input class='addr' value='${padAddr(d.addr)}' "
-      "style='width:55px' onblur='this.value=padAddr(this.value)'></td>` + ";
+      "style='width:75px' oninput='this.parentElement.nextElementSibling.innerText=getOffset(this.value)' "
+      "onblur='this.value=padAddr(this.value)'></td>` + ";
+  html += " `<td class='offset' style='color:#666;font-size:12px;width:100px;white-space:nowrap'>${getOffset(d.addr)}</td>` + ";
   html += " `<td><input class='name' value='${d.name}' style='width:90%; "
           "min-width:65px; max-width:100px; box-sizing:border-box'></td>` + ";
   html += " `<td><input class='targetVal' value='${d.targetVal}' "
-          "style='width:95%; min-width:130px; box-sizing:border-box; "
+          "style='width:95%; min-width:80px; box-sizing:border-box; "
           "color:#e67e22; font-weight:bold'></td>` + ";
   html += " `<td><input class='val status-val' value='${d.val}' "
-          "style='width:95%; min-width:130px; box-sizing:border-box; "
+          "style='width:95%; min-width:80px; box-sizing:border-box; "
           "color:#2980b9; font-weight:bold' readonly></td>` + ";
   html += " `<td><select class='type' style='width:85px'><option value='0' "
           "${d.type==0?'selected':''}>Int16</option><option value='1' "
@@ -564,7 +576,7 @@ static void handleHttpRoot() {
           "style='color:#4ec9b0'>[${l.type}]</span> ${l.hex}</div>`; }); "
           "c.innerHTML=h; c.scrollTop=c.scrollHeight; } else "
           "if(logs.length==0) { c.innerHTML='等待数据...'; } }catch(e){} }";
-  html += "setInterval(refreshRegValues, 2000);";
+  html += "setInterval(refreshRegValues, 1000);";
   html += "setInterval(refreshMonitor, 1000);";
   html += "document.getElementById('mainForm').onsubmit=async function(e){";
   html += " if(this.submitting) return; "
