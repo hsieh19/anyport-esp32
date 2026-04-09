@@ -36,9 +36,9 @@ jobs:
           arduino-cli lib install "Ethernet"
 
       - name: Compile Firmware
-        # 注意：fqbn 需要根据你的真实板型确认，这里默认为 esp32c3
+        # 根据用户 IDE 截图对齐参数：开启 USB CDC，设置 DIO 模式，4MB Flash，以及最重要的 Minimal SPIFFS 分区表
         run: |
-          arduino-cli compile --fqbn esp32:esp32:esp32c3 \
+          arduino-cli compile --fqbn esp32:esp32:esp32c3:CDCOnBoot=cdc,FlashMode=dio,FlashSize=4M,PartitionScheme=min_spiffs \
             --output-dir ./build \
             ./AnyPortGateway/AnyPortGateway.ino
 
