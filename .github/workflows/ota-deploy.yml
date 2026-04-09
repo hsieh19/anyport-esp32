@@ -1,0 +1,74 @@
+name: ESP32 OTA Deploy
+
+on:
+  push:
+    tags:
+      - 'v*' # 当推送 v1.4.0, v1.5.0 等标签时触发
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v3
+        with:
+          fetch-depth: 0 # 必须设为 0 以获取提交日志
+
+      - name: Extract Version from Tag
+        id: get_version
+        run: echo "VERSION=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
+
+      - name: Setup Arduino CLI
+        uses: arduino/setup-arduino-cli@v1
+
+      - name: Install ESP32 Platform
+        run: |
+          arduino-cli core update-index
+          arduino-cli core update-index --additional-urls https://raw.githubusercontent.com/espressif/arduino-esp32/gh-pages/package_esp32_index.json
+          arduino-cli core install esp32:esp32 --additional-urls https://raw.githubusercontent.com/espressif/arduino-esp32/gh-pages/package_esp32_index.json
+
+      - name: Install Libraries
+        run: |
+          arduino-cli lib install "ArduinoJson"
+          arduino-cli lib install "MQTT"
+
+      - name: Compile Firmware
+        # 注意：fqbn 需要根据你的真实板型确认，这里默认为 esp32c3
+        run: |
+          arduino-cli compile --fqbn esp32:esp32:esp32c3 \
+            --output-dir ./build \
+            ./AnyPortGateway/AnyPortGateway.ino
+
+      - name: Prepare R2 Structure
+        run: |
+          # 1. 创建符合 Worker 预想的目录结构
+          mkdir -p sync/anyport/Firmware
+          
+          # 2. 复制固件并重命名
+          cp ./build/AnyPortGateway.ino.bin ./sync/anyport/Firmware/AnyPortGateway_v${{ steps.get_version.outputs.VERSION }}.bin
+          
+          # 3. 从 CHANGELOG.md 中提取对应版本的更新日志
+          # 逻辑：查找 ## [版本号] 开始，直到遇到下一个 ## [ 为止的内容，并移除首尾空白
+          VERSION="${{ steps.get_version.outputs.VERSION }}"
+          EXTRACTED_LOG=$(awk "/## \[$VERSION\]/{flag=1;next}/## \[/{flag=0}flag" CHANGELOG.md | sed 's/"/\\"/g' | tr '\n' ' ')
+          
+          # 如果提取为空，则回退到 commit message
+          if [ -z "$EXTRACTED_LOG" ]; then
+            EXTRACTED_LOG=$(git log -1 --pretty=format:"%s")
+          fi
+          
+          # 4. 生成 version.json 到 anyport 根目录
+          echo "{ \"version\": \"$VERSION\", \"changelog\": \"$EXTRACTED_LOG\" }" > ./sync/anyport/version.json
+
+      - name: Sync to Cloudflare R2
+        uses: jakejarvis/s3-sync-action@master
+        with:
+          args: --follow-symlinks --delete
+        env:
+          AWS_S3_BUCKET: ${{ secrets.R2_BUCKET }}
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          AWS_S3_ENDPOINT: https://${{ secrets.R2_ACCOUNT_ID }}.r2.cloudflarestorage.com
+          AWS_REGION: auto
+          SOURCE_DIR: './sync'
+          DEST_DIR: '' # 直接同步到根，内部已维护 anyport 层级

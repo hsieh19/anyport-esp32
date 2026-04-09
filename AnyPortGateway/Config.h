@@ -161,6 +161,7 @@ void anyportGatewayLoop() {
         bridgeLoop();
     }
 
+    otaAutoCheckLoop();
     g_httpServer.handleClient();
 
     // 心跳逻辑

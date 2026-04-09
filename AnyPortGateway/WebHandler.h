@@ -124,9 +124,11 @@ static void handleHttpRoot() {
       "d1ecf1;color:#0c5460;border:1px solid "
       "#bee5eb;vertical-align:middle;font-weight:bold}</style>";
   html += "</head><body>";
-  html += "<h1>AnyPort固件控制面板 v" FIRMWARE_VERSION "<span "
-          "style='font-size:14px;color:#666;font-weight:normal;margin-left:"
-          "15px'>© 2026 Hotwon-CD2-Hsieh</span></h1>";
+  html += "<h1>AnyPort 智能网关控制面板 v" FIRMWARE_VERSION;
+  if (g_otaUpdateFound) {
+      html += " <span style='background:#17a2b8;color:white;font-size:12px;padding:2px 10px;border-radius:12px;margin-left:12px;vertical-align:middle;font-weight:normal'>发现新版本 v" + g_otaRemoteVersion + "</span>";
+  }
+  html += "<span style='font-size:14px;color:#666;font-weight:normal;margin-left:15px'>© 2026 Hotwon-CD2-Hsieh</span></h1>";
   html += "<form id='mainForm' method='POST' action='/config'>";
 
   // 1. 顶部：WIFI 与 模式切换
@@ -160,6 +162,9 @@ static void handleHttpRoot() {
   html += "<option value='3'" +
           String(g_workMode == WorkMode::BRIDGE ? " selected" : "") +
           ">协议互转模式</option>";
+  html += "<option value='4'" +
+          String(g_workMode == WorkMode::FIRMWARE_UPDATE ? " selected" : "") +
+          ">系统固件更新模式</option>";
   html += "</select>";
   html +=
       "<span class='badge'>当前运行模式: " +
@@ -168,7 +173,7 @@ static void handleHttpRoot() {
                  : (g_workMode == WorkMode::SIMULATOR
                         ? "从站模拟器"
                         : (g_workMode == WorkMode::TRANSPARENT ? "USB 透传"
-                                                               : "协议互转"))) +
+                                                               : (g_workMode == WorkMode::BRIDGE ? "协议互转" : "系统固件更新")))) +
       "</span>";
   html += "</div>";
 
@@ -203,9 +208,9 @@ static void handleHttpRoot() {
           String(g_ntpConfig.interval) + "'><br>";
   html += "</div>";
 
-  // 2.5 以太网配置 (W5500) - 在网关和模拟器模式下显示
+  // 2.5 以太网配置 (W5500) - 在网关、模拟器、协议互转模式下显示，升级模式隐藏
   html += "<div id='secEthConfig' class='card' style='display:" +
-          String(g_workMode != WorkMode::TRANSPARENT ? "block" : "none") + "'>";
+          String((g_workMode != WorkMode::TRANSPARENT && g_workMode != WorkMode::FIRMWARE_UPDATE) ? "block" : "none") + "'>";
   html += "<h2>以太网配置 (W5500)</h2>";
   html += "<label>IP 地址:</label><input name='ethIp' "
           "placeholder='192.168.1.100' value='" +
@@ -458,6 +463,16 @@ static void handleHttpRoot() {
   html += "<button type='button' id='btnPause' style='margin-top:10px; "
           "margin-left:10px; background:#336699' "
           "onclick='uiTogglePause()'>暂停接收</button>";
+  // 7. 固件维护模式
+  html += "<div id='secOta' class='card' style='display:" +
+          String(g_workMode == WorkMode::FIRMWARE_UPDATE ? "block" : "none") + "'>";
+  html += "<h2>系统固件在线更新 (OTA)</h2>";
+  html += "<div style='background:#f8f9fa;padding:15px;border:1px solid #dee2e6;border-radius:4px;margin-bottom:15px'>";
+  html += "<p><b>当前版本:</b> v" FIRMWARE_VERSION "</p>";
+  html += "<div id='otaInfo'>点击下方按钮检查云端是否有新版本...</div>";
+  html += "</div>";
+  html += "<button type='button' onclick='uiCheckOta()'>立即检查更新</button>";
+  html += "<button type='button' id='btnDoUpdate' style='margin-left:10px;background:#dc3545;display:none' onclick='uiDoUpdate()'>立即升级</button>";
   html += "</div>";
 
   html += "<button type='submit' class='save-btn'>保存并重启设备</button>";
@@ -479,6 +494,8 @@ static void handleHttpRoot() {
       "document.getElementById('secTransparent').style.display=(m=='2'?'"
       "block':'none'); "
       "document.getElementById('secBridge').style.display=(m=='3'?'"
+      "block':'none'); "
+      "document.getElementById('secOta').style.display=(m=='4'?'"
       "block':'none'); }";
   html += "function uiToggleBridge(d){ "
           "document.getElementById('bridgeTcpServer').style.display=(d=='0'?'"
@@ -618,7 +635,22 @@ static void handleHttpRoot() {
   html += "    this.submit();";
   html += "  } catch(e) { alert(e.message); this.submitting=false; }";
   html += " }";
-  html += "};";
+  html += "async function uiCheckOta(){ "
+          "let s=document.getElementById('otaInfo'); s.innerText='正在连接云端服务...'; "
+          "try{ let r=await fetch('/api/ota/check'); let data=await r.json(); "
+          "if(data.found){ s.innerHTML=`<b style='color:#28a745'>发现新版本: v${data.version}</b><br><p style='font-size:13px;color:#666'>更新内容: ${data.changelog}</p>`; "
+          "document.getElementById('btnDoUpdate').style.display='inline-block'; } "
+          "else { s.innerText='当前已是最新版本 ('+data.version+')'; } "
+          "}catch(e){ s.innerText='检测失败，请检查网络连接'; } }";
+  html += "async function uiDoUpdate(){ "
+          "if(!confirm('确定要开始固件升级吗？升级过程中请勿断电，设备将自动重启。'))return; "
+          "let btn = document.getElementById('btnDoUpdate'); btn.disabled=true; btn.innerText='正在校验固件...'; "
+          "try{ "
+          "  let r = await fetch('/api/ota/do',{method:'POST'}); "
+          "  if(!r.ok){ throw new Error('云端未找到固件文件或链接已失效'); } "
+          "  document.body.innerHTML='<div style=\"text-align:center;margin-top:100px\"><h1>正在执行系统升级...</h1><p>请勿切断电源，预计需要 1-2 分钟。</p><progress id=\"p\" style=\"width:300px\"></progress></div>'; "
+          "  setTimeout(()=>location.href='/', 80000); "
+          "}catch(e){ alert('升级失败: ' + e.message); btn.disabled=false; btn.innerText='立即升级'; } }";
   html += "fetch('/api/"
           "registers').then(r=>r.json()).then(data=>data.forEach(r=>addRegRow("
           "r)));";
@@ -785,8 +817,31 @@ static void handleHttpConfig() {
       "3000);</script></body></html>");
 }
 
+static void handleOtaCheck() {
+  int result = checkOtaUpdate();
+  DynamicJsonDocument doc(512);
+  doc["found"] = (result == 1);
+  doc["version"] = g_otaRemoteVersion != "" ? g_otaRemoteVersion : FIRMWARE_VERSION;
+  doc["changelog"] = g_otaChangelog;
+  String out;
+  serializeJson(doc, out);
+  g_httpServer.send(200, "application/json", out);
+}
+
+static void handleOtaUpdate() {
+  if (validateFirmwareExistence()) {
+    g_httpServer.send(200, "text/plain", "OK");
+    delay(500);
+    executeFirmwareUpdate();
+  } else {
+    g_httpServer.send(404, "text/plain", "Firmware not found");
+  }
+}
+
 static void initHttpServer() {
   g_httpServer.on("/", HTTP_GET, handleHttpRoot);
   g_httpServer.on("/config", HTTP_POST, handleHttpConfig);
+  g_httpServer.on("/api/ota/check", HTTP_GET, handleOtaCheck);
+  g_httpServer.on("/api/ota/do", HTTP_POST, handleOtaUpdate);
   g_httpServer.begin();
 }

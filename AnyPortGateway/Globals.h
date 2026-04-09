@@ -44,7 +44,7 @@ static constexpr const char *MQTT_SITE_ID = "office";
 static constexpr const char *MQTT_GATEWAY_ID = "gateway-01";
 static const size_t MQTT_JSON_DOC_SIZE = 1024;
 
-#define FIRMWARE_VERSION "1.3.1"
+#define FIRMWARE_VERSION "1.4.0"
 
 static const uint32_t RS485_DEFAULT_BAUDRATE = 9600;
 static const uint8_t RS485_DEFAULT_DATABITS = 8;
@@ -148,19 +148,22 @@ extern BridgeConfig g_bridgeConfig;
 // -----------------------
 // 5. 调试宏
 // -----------------------
-#define APP_LOG(fmt, ...) do { \
-    if (g_workMode != WorkMode::TRANSPARENT) { \
-        Serial.printf(fmt, ##__VA_ARGS__); \
-        Serial.println(); \
-    } \
-} while (0)
-#define APP_PRINT(x) do { \
-    if (g_workMode != WorkMode::TRANSPARENT) { \
-        Serial.print(x); \
-    } \
-} while (0)
-#define APP_PRINTLN(x) do { \
-    if (g_workMode != WorkMode::TRANSPARENT) { \
-        Serial.println(x); \
-    } \
-} while (0)
+#define APP_LOG(fmt, ...)                                                      \
+  do {                                                                         \
+    if (g_workMode != WorkMode::TRANSPARENT) {                                 \
+      Serial.printf(fmt, ##__VA_ARGS__);                                       \
+      Serial.println();                                                        \
+    }                                                                          \
+  } while (0)
+#define APP_PRINT(x)                                                           \
+  do {                                                                         \
+    if (g_workMode != WorkMode::TRANSPARENT) {                                 \
+      Serial.print(x);                                                         \
+    }                                                                          \
+  } while (0)
+#define APP_PRINTLN(x)                                                         \
+  do {                                                                         \
+    if (g_workMode != WorkMode::TRANSPARENT) {                                 \
+      Serial.println(x);                                                       \
+    }                                                                          \
+  } while (0)

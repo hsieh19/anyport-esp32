@@ -1,89 +1,56 @@
-本目录包含 AnyPort 项目的 ESP32-C3 固件工程，当前版本：**v1.3.0**。
+# AnyPort ESP32 Gateway Firmware
 
-固件支持四种独立的工作模式：
-1. **MQTT 网关模式**：将现场 Modbus RTU/TCP 设备的数据转发至 MQTT Broker，支持远程双向通讯。
-2. **从站模拟器模式**：模拟标准的 Modbus RTU/TCP 从站设备，支持寄存器自定义、数据类型转换及动态数值模拟。
-3. **USB 转 RS485 透传模式**：将 ESP32-C3 作为 USB-to-RS485 高速桥接器，支持上位机软件通过 USB 直接调试。
-4. **协议互转模式 (New)**：实现 Modbus TCP 与 Modbus RTU 的双向网桥功能，支持双向透传与地址自动映射。
+AnyPort 智能网关的系统固件，基于 ESP32-C3/S3 架构。本仓库提供了网关的核心逻辑、协议转换、以及高可用的远程更新系统。
 
----
+## 🚀 核心功能
+- **多模式运行**：支持 MQTT 网关、从站模拟器、USB 透传以及协议互转（Modbus TCP <-> RTU）。
+- **安全 OTA**：内置生产级远程升级系统，支持基于 HMAC-SHA256 签名的预签名 URL 下载。
+- **自动巡检**：设备启动 30s 后及每隔 24h 自动检查云端版本，发现更新时 Web UI 自动弹出提醒。
+- **网络自适应**：支持 WiFi 与 W5500 以太网共存，OTA 流量强制走 WiFi 通道确保云端可达性。
+- **独立维护模式**：新增维护模式（模式 4），在升级期间关闭所有非必要业务逻辑，确保烧录环境纯净稳定。
 
-### 1. 开发环境要求
+## 🔌 硬件引脚定义 (Pinout)
+本固件针对 ESP32-C3/S3 开发，默认引脚配置如下：
 
-- **IDE**：Arduino IDE 2.x 或 VS Code + PlatformIO。
-- **开发板核心**：ESP32 开发板支持包（Espressif Systems）。
-  - 在 Arduino IDE 中：安装 `esp32 by Espressif Systems 2.0.14`。
-- **推荐板型**：`ESP32C3 Dev Module`。
-- **关键设置**：编译时 **"USB CDC On Boot"** 建议设为 **"disabled"**。
+### **以太网模块 (W5500)**
+| 功能 | ESP32 引脚 | 说明 |
+| :--- | :--- | :--- |
+| **SCK** | GPIO 6 | SPI 时钟 |
+| **MISO** | GPIO 5 | SPI 数据输入 |
+| **MOSI** | GPIO 4 | SPI 数据输出 |
+| **CS** | GPIO 7 | 片选 |
+| **RST** | GPIO 1 | 复位 (硬复位确保稳定性) |
+| **INT** | GPIO 3 | 中断 (可选) |
 
----
+### **RS485 通信 (UART)**
+| 功能 | ESP32 引脚 | 对应模块引脚 |
+| :--- | :--- | :--- |
+| **RX** | GPIO 2 | 模块 RO (Receive Output) |
+| **TX** | GPIO 10 | 模块 DI (Driver Input) |
 
-### 2. 需要安装的 Arduino 库
+> [!TIP]
+> 建议在 RS485 模块的 DE/RE 引脚上使用自动收发电路，或者将它们连接到 GPIO 以进行手动流控（当前固件默认支持自动收发逻辑模块）。
 
-请通过库管理器安装以下依赖：
+## 🛠 快速开始
+1. **编译环境**：使用 Arduino IDE 2.x 或 PlatformIO。
+2. **依赖库**：
+   - `ArduinoJson`
+   - `PubSubClient`
+   - `HTTPClient`
+   - `HTTPUpdate`
+3. **配置文件**：
+   - 在 `OtaHandler.h` 中配置你的 OTA 服务器地址 (`OTA_API_BASE`)。
+   - 在 `Globals.h` 中配置你的默认 MQTT Broker 地址。
+   - 在加密密钥环境变量中设置与 Cloudflare Worker 一致的 `SEC_KEY`。
 
-1. **Ethernet** (作者 Arduino/Paul Stoffregen)：用于 W5500 以太网通讯（专用于 Modbus TCP 静态连接）。
-2. **ArduinoJson** (作者 Benoit Blanchon)：用于 JSON 消息的解析与序列化。
-3. **MQTT** (作者 Joel Gaehwiler)：轻量级 MQTT 客户端实现。
+## 🔐 OTA 安全机制
+AnyPort 采用“三段式”下载流程以确保固件安全：
+1. **版本检查**：请求 `/check` 获取最新版本号与 Changelog。
+2. **预检与签名**：请求 `/get-link`。Worker 验证 R2 存储中文件存在性后，返回一个 10 分钟有效的加密签名链接。
+3. **安全下载**：ESP32 使用签名链接从 `/download` 接口拉取固件流并执行 A/B 分区切换。
 
----
+## 🤝 关联项目
+- [AnyPort Simulator UI](https://github.com/hsieh19/anyport)：配套的前端调试与配置工具。
 
-### 3. 工程结构
-
-- `AnyPortGateway.ino`：主程序入口。
-- `Config.h`：核心配置文件，包含引脚、全域变量定义及初始化流控。
-- `Globals.h`：底层常量、引脚定义及固件版本号。
-- `TransparentHandler.h`：**Mode 3 核心引擎**，实现 USB 与 RS485 的双向高速透传。
-- `NetworkManager.h`：WiFi (STA/AP)、NTP 时间同步、mDNS 发现服务。
-- `MqttHandler.h`：MQTT 连线管理与重连安全阀逻辑。
-- `ModbusHandler.h`：Modbus 协议转发逻辑与 CRC 校验。
-- `WebHandler.h`：内置 Web 控制面板，包含所有模式切换与参数配置界面。
-- `SimulatorCore.h` / `SimulatorWeb.h`：从站模拟器核心逻辑与 Web API。
-
----
-
-### 4. 主要功能特性
-
-#### v1.3.0 (当前版本)
-- **协议互转模式 (Mode 4)**：支持双向 Modbus Bridge（TCP <-> RTU）。具备 TCP Server 监听与 RTU 监听两种角色。
-- **以太网链路级稳定性修复**：解决 W5500 PHY 协商失败、Socket 耗尽及直连同步锁死问题。
-- **TCP 连接复用**：针对 Modbus TCP 采集优化，降低 Socket 损耗。
-
-#### v1.2.2
-- **USB 转 RS485 透传**：针对 ESP32-C3 原生 USB 优化。支持在 Web 端手动配置 RS485 侧的波特率、校验位等参数。
-- **mDNS 域名访问**：支持通过 `anyport.local` 直接访问 Web 后台，无需记忆动态 IP。
-- **网络稳定性优化**：WiFi 掉线自动重连，MQTT 失败 3 次自动重试锁死保护（确保 Web 访问始终可用）。
-
-#### v1.1.0
-- **从站模拟器**：支持 0x/1x/3x/4x 区域，支持 ABCD/DCBA/BADC/CDAB 四种字节序转换及 Float/Int32/String 等数据类型。
-- **动态模拟**：模拟寄存器数值随机跳动、累加或递减。
-
----
-
-### 5. 引脚定义（ESP32-C3）
-
-| 外设 | 引脚功能 | GPIO | 说明 |
-| :--- | :--- | :--- | :--- |
-| **W5500** | CS / SCK / MISO / MOSI | 7 / 6 / 5 / 4 | SPI 总线连接 |
-|  | RST / INT | 1 / 3 | 复位与中断 |
-| **RS485** | TXD / RXD | 10 / 2 | 对应硬件 UART1 |
-
----
-
-### 6. 快速开始
-
-1. **编译烧录**：将工程烧录至 ESP32-C3 开发板。
-2. **连接网络**：
-   - 第一次使用会开启 AP 热点 `anyport` (密码 `12345678`)。
-   - 配置 WiFi 联网后，直接访问 `http://anyport.local` 进入控制面板。
-3. **模式切换**：
-   - 进入控制面板，在“基础配置”中切换模式（网关/模拟器/透传）。
-   - **进入透传模式**：保存后，ESP32 充当“智能调试线”，上位机软件选择对应的串口号即可通讯。
-
----
-
-### 7. 注意事项
-
-- **透传参数同步**：由于 ESP32-C3 内部 USB 硬件限制，它是无法感知上位机软件（如 Modbus Poll）里点击的波特率修改的。**必须在 AnyPort 的 Web 页面上设置 RS485 参数**。
-- **供电**：W5500 建议连接 5V 供电。
-- **串口隔离**：进入透传模式后，系统会自动关闭所有调试 Log 输出，防止干扰原始 RS485 通信。
+## 📜 许可证
+© 2026 Hotwon-CD2-Hsieh / AnyPort Project.

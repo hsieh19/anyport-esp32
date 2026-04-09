@@ -55,7 +55,7 @@ static int checkOtaUpdate() {
     String checkUrl = String(OTA_API_BASE) + "/check";
 
     if (!http.begin(client, checkUrl)) return -1;
-    http.setUserAgent("Mozilla/5.0 AnyPort-Collector/1.3.1");
+    http.setUserAgent("Mozilla/5.0 AnyPort-Collector/" FIRMWARE_VERSION);
     int httpCode = http.GET();
 
     if (httpCode == 200) {
