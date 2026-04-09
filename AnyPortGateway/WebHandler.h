@@ -125,9 +125,9 @@ static void handleHttpRoot() {
       "d1ecf1;color:#0c5460;border:1px solid "
       "#bee5eb;vertical-align:middle;font-weight:bold}</style>";
   html += "</head><body>";
-  html += "<h1>AnyPort 智能网关控制面板 v" FIRMWARE_VERSION;
+  html += "<h1 id='mainTitle'>AnyPort 智能网关控制面板 v" FIRMWARE_VERSION;
   if (g_otaUpdateFound) {
-      html += " <span style='background:#17a2b8;color:white;font-size:12px;padding:2px 10px;border-radius:12px;margin-left:12px;vertical-align:middle;font-weight:normal'>发现新版本 v" + g_otaRemoteVersion + "</span>";
+      html += "<span id='otaBadge' class='badge' style='background:#dc3545;color:white;border-color:#bd2130'>有新版本</span>";
   }
   html += "<span style='font-size:14px;color:#666;font-weight:normal;margin-left:15px'>© 2026 Hotwon-CD2-Hsieh</span></h1>";
   html += "<form id='mainForm' method='POST' action='/config'>";
@@ -209,7 +209,7 @@ static void handleHttpRoot() {
           String(g_ntpConfig.interval) + "'><br>";
   html += "</div>";
 
-  // 2.5 以太网配置 (W5500) - 在网关、模拟器、协议互转模式下显示，升级模式隐藏
+  // 2.5 以太网配置 (W5500) - 在网关、模拟器、协议互转模式下显示，透传与升级模式隐藏
   html += "<div id='secEthConfig' class='card' style='display:" +
           String((g_workMode != WorkMode::TRANSPARENT && g_workMode != WorkMode::FIRMWARE_UPDATE) ? "block" : "none") + "'>";
   html += "<h2>以太网配置 (W5500)</h2>";
@@ -464,16 +464,23 @@ static void handleHttpRoot() {
   html += "<button type='button' id='btnPause' style='margin-top:10px; "
           "margin-left:10px; background:#336699' "
           "onclick='uiTogglePause()'>暂停接收</button>";
+  html += "</div>";  // 关闭 secMonitor
+
   // 7. 固件维护模式
   html += "<div id='secOta' class='card' style='display:" +
           String(g_workMode == WorkMode::FIRMWARE_UPDATE ? "block" : "none") + "'>";
   html += "<h2>系统固件在线更新 (OTA)</h2>";
-  html += "<div style='background:#f8f9fa;padding:15px;border:1px solid #dee2e6;border-radius:4px;margin-bottom:15px'>";
-  html += "<p><b>当前版本:</b> v" FIRMWARE_VERSION "</p>";
-  html += "<div id='otaInfo'>点击下方按钮检查云端是否有新版本...</div>";
-  html += "</div>";
-  html += "<button type='button' onclick='uiCheckOta()'>立即检查更新</button>";
-  html += "<button type='button' id='btnDoUpdate' style='margin-left:10px;background:#dc3545;display:none' onclick='uiDoUpdate()'>立即升级</button>";
+    if (g_otaUpdateFound) {
+      html += "      <div style='margin-bottom:10px'><b style='color:#28a745;font-size:16px'>发现新版本: v" + g_otaRemoteVersion + "</b></div>";
+      html += "      <div style='font-size:13px;color:#444;background:#f8f9fa;padding:12px;border-radius:6px;border-left:4px solid #17a2b8;white-space:pre-wrap;line-height:1.5;text-align:left'>";
+      html += g_otaChangelog;
+      html += "      </div>";
+      html += "      <button type='button' id='btnDoUpdate' onclick='uiDoUpdate()' style='margin-top:15px;background:#dc3545'>立即升级</button>";
+    } else {
+      html += "      <div id='otaInfo' style='font-size:14px;color:#666'>点击下方按钮检查云端是否有新版本...</div>";
+      html += "      <button type='button' onclick='uiCheckOta()' style='margin-top:10px'>立即检查更新</button>";
+      html += "      <button type='button' id='btnDoUpdate' style='margin-top:10px;margin-left:10px;background:#dc3545;display:none' onclick='uiDoUpdate()'>立即升级</button>";
+    }
   html += "</div>";
 
   html += "<button type='submit' class='save-btn'>保存并重启设备</button>";
@@ -482,22 +489,14 @@ static void handleHttpRoot() {
   html += "<script>";
   html +=
       "function uiToggleMode(m){ "
-      "document.getElementById('secGateway').style.display=(m=='0'?'block':"
-      "'none'); "
-      "document.getElementById('secEthConfig').style.display=(m!='2'?'block':"
-      "'none'); "
-      "document.getElementById('secSimulator').style.display=(m=='1'?'"
-      "block':'none'); "
-      "document.getElementById('secRegisters').style.display=(m=='1'?'"
-      "block':'none'); "
-      "document.getElementById('secMonitor').style.display=(m=='1'?'"
-      "block':'none'); "
-      "document.getElementById('secTransparent').style.display=(m=='2'?'"
-      "block':'none'); "
-      "document.getElementById('secBridge').style.display=(m=='3'?'"
-      "block':'none'); "
-      "document.getElementById('secOta').style.display=(m=='4'?'"
-      "block':'none'); }";
+      "document.getElementById('secGateway').style.display=(m=='0'?'block':'none'); "
+      "document.getElementById('secEthConfig').style.display=(m!='2'&&m!='4'?'block':'none'); "
+      "document.getElementById('secSimulator').style.display=(m=='1'?'block':'none'); "
+      "document.getElementById('secRegisters').style.display=(m=='1'?'block':'none'); "
+      "document.getElementById('secMonitor').style.display=(m=='1'?'block':'none'); "
+      "document.getElementById('secTransparent').style.display=(m=='2'?'block':'none'); "
+      "document.getElementById('secBridge').style.display=(m=='3'?'block':'none'); "
+      "document.getElementById('secOta').style.display=(m=='4'?'block':'none'); }";
   html += "function uiToggleBridge(d){ "
           "document.getElementById('bridgeTcpServer').style.display=(d=='0'?'"
           "block':'none'); "
@@ -636,10 +635,12 @@ static void handleHttpRoot() {
   html += "    this.submit();";
   html += "  } catch(e) { alert(e.message); this.submitting=false; }";
   html += " }";
+  html += "};";  // 关闭 onsubmit 函数
   html += "async function uiCheckOta(){ "
           "let s=document.getElementById('otaInfo'); s.innerText='正在连接云端服务...'; "
           "try{ let r=await fetch('/api/ota/check'); let data=await r.json(); "
-          "if(data.found){ s.innerHTML=`<b style='color:#28a745'>发现新版本: v${data.version}</b><br><p style='font-size:13px;color:#666'>更新内容: ${data.changelog}</p>`; "
+          "if(data.found){ s.innerHTML=`<div style='margin-bottom:10px'><b style='color:#28a745;font-size:16px'>发现新版本: v${data.version}</b></div>"
+          "<div style='font-size:13px;color:#444;background:#f8f9fa;padding:12px;border-radius:6px;border-left:4px solid #17a2b8;white-space:pre-wrap;line-height:1.5;text-align:left'>${data.changelog}</div>`; "
           "document.getElementById('btnDoUpdate').style.display='inline-block'; } "
           "else { s.innerText='当前已是最新版本 ('+data.version+')'; } "
           "}catch(e){ s.innerText='检测失败，请检查网络连接'; } }";
@@ -655,6 +656,16 @@ static void handleHttpRoot() {
   html += "fetch('/api/"
           "registers').then(r=>r.json()).then(data=>data.forEach(r=>addRegRow("
           "r)));";
+  html += "(function pollOtaBadge(){"
+          "setTimeout(async function(){"
+          "try{ let r=await fetch('/api/ota/status'); let d=await r.json(); "
+          "if(d.found && !document.getElementById('otaBadge')){"
+          "let h=document.getElementById('mainTitle');"
+          "let s=document.createElement('span'); s.id='otaBadge'; s.className='badge';"
+          "s.style.cssText='background:#dc3545;color:white;border-color:#bd2130';"
+          "s.innerText='\u6709\u65b0\u7248\u672c';"
+          "h.insertBefore(s,h.querySelector('span'));"
+          "} }catch(e){} pollOtaBadge(); }, 30000); })();";
   html += "</script></body></html>";
 
   g_httpServer.send(200, "text/html; charset=utf-8", html);
@@ -839,10 +850,18 @@ static void handleOtaUpdate() {
   }
 }
 
+static void handleOtaStatus() {
+  String json = "{\"found\":" + String(g_otaUpdateFound ? "true" : "false") +
+                ",\"version\":\"" + g_otaRemoteVersion + "\"}";
+  g_httpServer.sendHeader("Cache-Control", "no-cache");
+  g_httpServer.send(200, "application/json", json);
+}
+
 static void initHttpServer() {
   g_httpServer.on("/", HTTP_GET, handleHttpRoot);
   g_httpServer.on("/config", HTTP_POST, handleHttpConfig);
   g_httpServer.on("/api/ota/check", HTTP_GET, handleOtaCheck);
   g_httpServer.on("/api/ota/do", HTTP_POST, handleOtaUpdate);
+  g_httpServer.on("/api/ota/status", HTTP_GET, handleOtaStatus);
   g_httpServer.begin();
 }

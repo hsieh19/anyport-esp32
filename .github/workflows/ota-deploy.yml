@@ -51,18 +51,15 @@ jobs:
           # 2. 复制固件并重命名
           cp ./build/AnyPortGateway.ino.bin ./sync/anyport/Firmware/AnyPortGateway_v${{ steps.get_version.outputs.VERSION }}.bin
           
-          # 3. 从 CHANGELOG.md 中提取对应版本的更新日志
-          # 逻辑：查找 ## [版本号] 开始，直到遇到下一个 ## [ 为止的内容，并移除首尾空白
+          # 3. 从 CHANGELOG.md 中提取对应版本的更新日志 (保留换行)
           VERSION="${{ steps.get_version.outputs.VERSION }}"
-          EXTRACTED_LOG=$(awk "/## \[$VERSION\]/{flag=1;next}/## \[/{flag=0}flag" CHANGELOG.md | sed 's/"/\\"/g' | tr '\n' ' ')
+          awk "/## \[$VERSION\]/{flag=1;next}/## \[/{flag=0}flag" CHANGELOG.md > temp_changelog.txt
           
-          # 如果提取为空，则回退到 commit message
-          if [ -z "$EXTRACTED_LOG" ]; then
-            EXTRACTED_LOG=$(git log -1 --pretty=format:"%s")
-          fi
+          # 使用 Python 进行标准的 JSON 转义（处理引号、换行等）
+          ESCAPED_LOG=$(python3 -c 'import json, sys; print(json.dumps(sys.stdin.read().strip()))' < temp_changelog.txt)
           
-          # 4. 生成 version.json 到 anyport 根目录
-          echo "{ \"version\": \"$VERSION\", \"changelog\": \"$EXTRACTED_LOG\" }" > ./sync/anyport/version.json
+          # 4. 生成 version.json
+          echo "{ \"version\": \"$VERSION\", \"changelog\": $ESCAPED_LOG }" > ./sync/anyport/version.json
 
       - name: Sync to Cloudflare R2
         uses: jakejarvis/s3-sync-action@master
