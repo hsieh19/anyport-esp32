@@ -25,12 +25,15 @@ jobs:
         run: |
           arduino-cli core update-index
           arduino-cli core update-index --additional-urls https://raw.githubusercontent.com/espressif/arduino-esp32/gh-pages/package_esp32_index.json
-          arduino-cli core install esp32:esp32 --additional-urls https://raw.githubusercontent.com/espressif/arduino-esp32/gh-pages/package_esp32_index.json
+          # 锁定使用 2.0.14 版本
+          arduino-cli core install esp32:esp32@2.0.14 --additional-urls https://raw.githubusercontent.com/espressif/arduino-esp32/gh-pages/package_esp32_index.json
 
       - name: Install Libraries
         run: |
           arduino-cli lib install "ArduinoJson"
           arduino-cli lib install "MQTT"
+          # 显式安装 Ethernet 库
+          arduino-cli lib install "Ethernet"
 
       - name: Compile Firmware
         # 注意：fqbn 需要根据你的真实板型确认，这里默认为 esp32c3
