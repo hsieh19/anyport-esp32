@@ -44,6 +44,7 @@ unsigned long g_lastHeartbeatMs = 0;
 #include "NetworkManager.h"
 #include "ModbusHandler.h"
 #include "MqttHandler.h"
+#include "OtaHandler.h"
 #include "WebHandler.h"
 #include "SimulatorCore.h"
 #include "SimulatorWeb.h"

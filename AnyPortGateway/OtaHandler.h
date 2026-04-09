@@ -17,7 +17,7 @@ static unsigned long g_lastOtaCheck = 0;
  * @brief 内部函数：获取并校验下载链接
  * @return true: 链接有效, false: 文件不存在或获取失败
  */
-static bool validateFirmwareExistence() {
+inline bool validateFirmwareExistence() {
     if (g_otaRemoteVersion == "") return false;
 
     WiFiClientSecure client;
@@ -46,7 +46,7 @@ static bool validateFirmwareExistence() {
 /**
  * @brief 步骤 1: 检查是否存在新版本
  */
-static int checkOtaUpdate() {
+inline int checkOtaUpdate() {
     if (WiFi.status() != WL_CONNECTED && Ethernet.linkStatus() != LinkON) return -2;
 
     WiFiClientSecure client;
@@ -73,7 +73,7 @@ static int checkOtaUpdate() {
     return -1;
 }
 
-static void otaAutoCheckLoop() {
+inline void otaAutoCheckLoop() {
     static bool firstCheckDone = false;
     unsigned long now = millis();
     if (!firstCheckDone && now > 30000) {
@@ -94,7 +94,7 @@ static void otaAutoCheckLoop() {
 /**
  * @brief 步骤 2: 执行固件更新 (使用已预检的链接)
  */
-static void executeFirmwareUpdate() {
+inline void executeFirmwareUpdate() {
     if (g_otaValidatedUrl == "") return;
 
     WiFiClientSecure client;

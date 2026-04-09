@@ -3,6 +3,7 @@
 #include "Globals.h"
 #include "SimulatorCore.h"
 #include "SimulatorWeb.h"
+#include "OtaHandler.h"
 
 // -----------------------
 // 1. MQTT 消息路由

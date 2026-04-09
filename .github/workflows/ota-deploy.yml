@@ -32,8 +32,9 @@ jobs:
         run: |
           arduino-cli lib install "ArduinoJson"
           arduino-cli lib install "MQTT"
-          # 显式安装 Ethernet 库
           arduino-cli lib install "Ethernet"
+          arduino-cli lib install "ModbusMaster"
+          arduino-cli lib install "NTPClient"
 
       - name: Compile Firmware
         # 根据用户 IDE 截图对齐参数：开启 USB CDC，设置 DIO 模式，4MB Flash，以及最重要的 Minimal SPIFFS 分区表
