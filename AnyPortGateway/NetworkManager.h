@@ -265,7 +265,7 @@ static void initSpiAndEthernet() {
 
   // --- Round 0: 自然建链（最小干预）---
   APP_PRINTLN("[W5500] Round 0: Waiting for natural link...");
-  if (waitForLink(2000)) {
+  if (waitForLink(4000)) {
     APP_PRINTLN("[W5500] Link UP (natural)");
     return;
   }
@@ -273,7 +273,7 @@ static void initSpiAndEthernet() {
   // --- Round 1: PHY 软复位（硬件模式）---
   APP_PRINTLN("[W5500] Round 1: PHY reset (HW mode)...");
   resetW5500Phy(0x07, true);
-  if (waitForLink(2000)) {
+  if (waitForLink(3000)) {
     APP_PRINTLN("[W5500] Link UP (HW mode PHY reset)");
     return;
   }
@@ -289,7 +289,7 @@ static void initSpiAndEthernet() {
   // --- Round 3: 恢复硬件模式（给对端设备第二次机会）---
   APP_PRINTLN("[W5500] Round 3: Back to HW mode...");
   resetW5500Phy(0x07, true);
-  if (waitForLink(2000)) {
+  if (waitForLink(3000)) {
     APP_PRINTLN("[W5500] Link UP (HW mode, retry)");
     return;
   }
