@@ -245,16 +245,56 @@ static void initSpiAndEthernet() {
   APP_LOG("[W5500] Hardware detected (chip: %d)", hwStatus);
   APP_LOG("[W5500] IP: %s", Ethernet.localIP().toString().c_str());
 
-  // === 步骤 4: 快速链路检查 ===
-  APP_PRINTLN("[W5500] Checking Link...");
-  if (!waitForLink(2000)) {
-    resetW5500Phy(0x07, true);
-    if (!waitForLink(2000)) {
-      APP_PRINTLN("[W5500] Link DOWN.");
-      return;
-    }
+  // === 步骤 4: MAC 地址抖动 ===
+  // 两台 W5500 同时上电时制造确定性启动偏差
+  unsigned long jitter = (((unsigned long)g_macAddress[4] << 8) | g_macAddress[5]) % 501;
+  APP_LOG("[W5500] PHY init jitter: %lu ms", jitter);
+  if (jitter > 0) delay(jitter);
+
+  // 读取当前 PHYCFGR 状态（诊断用）
+  uint8_t phyCfg = readPhyCfgr();
+  APP_LOG("[W5500] PHYCFGR after init: 0x%02X", phyCfg);
+
+  // === 步骤 5: 多轮自适应链路建立 ===
+  //
+  // Round 0: 不碰 PHYCFGR，使用硬件复位后的自然状态
+  // Round 1: 通过 PHYCFGR 显式触发 PHY 软复位 (OPMD=0)
+  // Round 2: 强制 100M Full Duplex (OPMD=1, OPMDC=011)
+  //   给有缺陷的、无法自动协商的模块使用
+  // Round 3: 恢复硬件模式（给对端设备第二次机会）
+
+  // --- Round 0: 自然建链（最小干预）---
+  APP_PRINTLN("[W5500] Round 0: Waiting for natural link...");
+  if (waitForLink(2000)) {
+    APP_PRINTLN("[W5500] Link UP (natural)");
+    return;
   }
-  APP_PRINTLN("[W5500] Link UP.");
+
+  // --- Round 1: PHY 软复位（硬件模式）---
+  APP_PRINTLN("[W5500] Round 1: PHY reset (HW mode)...");
+  resetW5500Phy(0x07, true);
+  if (waitForLink(2000)) {
+    APP_PRINTLN("[W5500] Link UP (HW mode PHY reset)");
+    return;
+  }
+
+  // --- Round 2: 强制 100M FD（软件模式）---
+  APP_PRINTLN("[W5500] Round 2: Forced 100M FD (SW mode)...");
+  resetW5500Phy(0x03, false);
+  if (waitForLink(2000)) {
+    APP_PRINTLN("[W5500] Link UP (Forced 100M FD)");
+    return;
+  }
+
+  // --- Round 3: 恢复硬件模式（给对端设备第二次机会）---
+  APP_PRINTLN("[W5500] Round 3: Back to HW mode...");
+  resetW5500Phy(0x07, true);
+  if (waitForLink(2000)) {
+    APP_PRINTLN("[W5500] Link UP (HW mode, retry)");
+    return;
+  }
+
+  APP_PRINTLN("[W5500] Link DOWN (no peer detected)");
 }
 
 static void initMdns() {

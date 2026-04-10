@@ -492,6 +492,21 @@ static void handleHttpRoot() {
       html += "      <button type='button' onclick='uiCheckOta()' style='margin-top:10px'>立即检查更新</button>";
       html += "      <button type='button' id='btnDoUpdate' style='margin-top:10px;margin-left:10px;background:#dc3545;display:none' onclick='uiDoUpdate()'>立即升级</button>";
     }
+
+  // 回滚功能区
+  {
+    String backupVer;
+    bool canRollback;
+    getBackupPartitionInfo(backupVer, canRollback);
+    html += "<hr style='margin:20px 0;border-color:#eee'>";
+    html += "<h3>固件回滚</h3>";
+    if (canRollback) {
+      html += "<p style='font-size:13px;color:#666'>备用分区检测到历史版本: <b style='color:#17a2b8'>v" + backupVer + "</b></p>";
+      html += "<button type='button' onclick='uiRollback()' style='background:#e67e22;margin-top:5px'>⏪ 回滚到 v" + backupVer + "</button>";
+    } else {
+      html += "<p style='font-size:13px;color:#999'>备用分区暂无可用的历史固件（首次烧录或分区已被覆盖）。</p>";
+    }
+  }
   html += "</div>";
   
   // 8. 模式 E: WiFi 转以太网透传模式配置
@@ -681,6 +696,14 @@ static void handleHttpRoot() {
           "  document.body.innerHTML='<div style=\"text-align:center;margin-top:100px\"><h1>正在执行系统升级...</h1><p>请勿切断电源，预计需要 1-2 分钟。</p><progress id=\"p\" style=\"width:300px\"></progress></div>'; "
           "  setTimeout(()=>location.href='/', 80000); "
           "}catch(e){ alert('升级失败: ' + e.message); btn.disabled=false; btn.innerText='立即升级'; } }";
+  html += "async function uiRollback(){ "
+          "if(!confirm('确认要回滚到备用分区的历史固件吗？\\n回滚后设备将自动重启。'))return; "
+          "try{ let r = await fetch('/api/ota/rollback',{method:'POST'}); "
+          "let d = await r.json(); "
+          "if(d.ok){ document.body.innerHTML='<div style=\"text-align:center;margin-top:100px\"><h1>正在回滚固件...</h1><p>设备将在数秒后自动重启，请稍候。</p></div>'; "
+          "setTimeout(()=>location.href=\'/\', 10000); } "
+          "else { alert('回滚失败: ' + (d.error || '未知错误')); } "
+          "}catch(e){ alert('回滚请求失败: ' + e.message); } }";
   html += "fetch('/api/"
           "registers').then(r=>r.json()).then(data=>data.forEach(r=>addRegRow("
           "r)));";
@@ -899,11 +922,22 @@ static void handleOtaStatus() {
   g_httpServer.send(200, "application/json", json);
 }
 
+static void handleOtaRollback() {
+  if (executeRollback()) {
+    g_httpServer.send(200, "application/json", "{\"ok\":true}");
+    delay(1000);
+    ESP.restart();
+  } else {
+    g_httpServer.send(200, "application/json", "{\"ok\":false,\"error\":\"备用分区无有效固件\"}");
+  }
+}
+
 static void initHttpServer() {
   g_httpServer.on("/", HTTP_GET, handleHttpRoot);
   g_httpServer.on("/config", HTTP_POST, handleHttpConfig);
   g_httpServer.on("/api/ota/check", HTTP_GET, handleOtaCheck);
   g_httpServer.on("/api/ota/do", HTTP_POST, handleOtaUpdate);
   g_httpServer.on("/api/ota/status", HTTP_GET, handleOtaStatus);
+  g_httpServer.on("/api/ota/rollback", HTTP_POST, handleOtaRollback);
   g_httpServer.begin();
 }
