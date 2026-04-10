@@ -72,6 +72,7 @@ struct SimulatorGlobalConfig {
     uint8_t unitId;      // 从站地址码
     bool tcpEnabled;
     uint16_t tcpPort;
+    uint8_t netInterface; // 0: Auto, 1: W5500, 2: WiFi
     bool monitorEnabled; // 是否开启报文监听
     uint8_t monitorFilter; // 0:全线报文, 1:仅本站报文
 };
@@ -80,7 +81,7 @@ struct SimulatorGlobalConfig {
 static const size_t MAX_SIM_VARIABLES = 32;
 static SimulatorVariable g_simVariables[MAX_SIM_VARIABLES];
 static size_t g_simVarCount = 0;
-static SimulatorGlobalConfig g_simConfig = {true, 9600, 1, 0, 8, 1, true, 502, false, 0};
+static SimulatorGlobalConfig g_simConfig = {true, 9600, 1, 0, 8, 1, true, 502, 0, false, 0};
 
 // 报文监听循环缓冲区
 struct MonitorLog {
@@ -530,79 +531,88 @@ static void handleRtuSerial() {
 
 // 使用 Globals.h 中定义的 EspEthernetServer
 
-// Modbus TCP 服务对象 (改为动态分配以支持运行期/重启后端口变更)
-static EspEthernetServer* g_simTcpServer = nullptr;
-static EthernetClient g_simTcpClients[4]; // 最多 4 个并发连接
+static EspEthernetServer* g_simTcpEthServer = nullptr;
+static EthernetClient g_simTcpEthClients[2]; 
+static WiFiServer* g_simTcpWifiServer = nullptr;
+static WiFiClient g_simTcpWifiClients[2];
+
+static void processGenericTcpClient(Client& client, uint8_t type) {
+    if (!client || !client.connected()) return;
+    
+    if (client.available() >= 7) { 
+        uint8_t mbap[7];
+        client.read(mbap, 7);
+        
+        uint16_t len = (mbap[4] << 8) | mbap[5];
+        if (len > 0 && len < 260) {
+            uint8_t pdu[256];
+            pdu[0] = mbap[6]; // Unit ID
+            
+            int pduGot = 1;
+            unsigned long startWait = millis();
+            while (pduGot < len && millis() - startWait < 50) {
+                if (client.available()) {
+                    pdu[pduGot++] = client.read();
+                }
+            }
+
+            if (pduGot == len) {
+                uint8_t fullReq[263];
+                memcpy(fullReq, mbap, 7);
+                if (len > 1) memcpy(&fullReq[7], &pdu[1], len - 1);
+                addMonitorLog(false, type, fullReq, 6 + len);
+
+                uint8_t responsePdu[256];
+                int respPduLen = handleModbusFrame(pdu, len, responsePdu);
+                
+                if (respPduLen > 0) {
+                    uint8_t respFrame[263];
+                    memcpy(respFrame, mbap, 4); 
+                    respFrame[4] = (respPduLen >> 8);
+                    respFrame[5] = (respPduLen & 0xFF);
+                    memcpy(&respFrame[6], responsePdu, respPduLen);
+
+                    client.write(respFrame, 6 + respPduLen);
+                    client.flush();
+                    addMonitorLog(true, type, respFrame, 6 + respPduLen);
+                }
+            }
+        }
+    }
+}
 
 /**
  * @brief 处理 Modbus TCP 流量
  */
 static void handleTcpServer() {
-    if (!g_simTcpServer) return;
-    
-    // 接受新连接
-    EthernetClient newClient = g_simTcpServer->accept();
-    if (newClient) {
-        bool accepted = false;
-        for (int i = 0; i < 4; i++) {
-            if (!g_simTcpClients[i] || !g_simTcpClients[i].connected()) {
-                g_simTcpClients[i] = newClient;
-                accepted = true;
-                break;
-            }
-        }
-        if (!accepted) newClient.stop(); // 超过最大连接数
-    }
-
-    // 处理现有连接并回收资源
-    for (int i = 0; i < 4; i++) {
-        if (g_simTcpClients[i]) {
-            if (!g_simTcpClients[i].connected()) {
-                g_simTcpClients[i].stop();
-                continue;
-            }
-            
-            if (g_simTcpClients[i].available() >= 7) { 
-                uint8_t mbap[7];
-                g_simTcpClients[i].read(mbap, 7);
-                
-                uint16_t len = (mbap[4] << 8) | mbap[5];
-                if (len > 0 && len < 260) {
-                    uint8_t pdu[256];
-                    pdu[0] = mbap[6]; // Unit ID
-                    
-                    int pduGot = 1;
-                    unsigned long startWait = millis();
-                    while (pduGot < len && millis() - startWait < 50) {
-                        if (g_simTcpClients[i].available()) {
-                            pdu[pduGot++] = g_simTcpClients[i].read();
-                        }
-                    }
-
-                    if (pduGot == len) {
-                        uint8_t fullReq[263];
-                        memcpy(fullReq, mbap, 7);
-                        if (len > 1) memcpy(&fullReq[7], &pdu[1], len - 1);
-                        addMonitorLog(false, 1, fullReq, 6 + len);
-
-                        uint8_t responsePdu[256];
-                        int respPduLen = handleModbusFrame(pdu, len, responsePdu);
-                        
-                        if (respPduLen > 0) {
-                            uint8_t respFrame[263];
-                            memcpy(respFrame, mbap, 4); 
-                            respFrame[4] = (respPduLen >> 8);
-                            respFrame[5] = (respPduLen & 0xFF);
-                            memcpy(&respFrame[6], responsePdu, respPduLen);
-
-                            g_simTcpClients[i].write(respFrame, 6 + respPduLen);
-                            g_simTcpClients[i].flush();
-                            addMonitorLog(true, 1, respFrame, 6 + respPduLen);
-                        }
-                    }
+    // 1. 处理以太网连接
+    if (g_simTcpEthServer) {
+        EthernetClient newEth = g_simTcpEthServer->accept();
+        if (newEth) {
+            bool ok = false;
+            for (int i = 0; i < 2; i++) {
+                if (!g_simTcpEthClients[i] || !g_simTcpEthClients[i].connected()) {
+                    g_simTcpEthClients[i] = newEth; ok = true; break;
                 }
             }
+            if (!ok) newEth.stop();
         }
+        for (int i = 0; i < 2; i++) processGenericTcpClient(g_simTcpEthClients[i], 1);
+    }
+
+    // 2. 处理 WiFi 连接
+    if (g_simTcpWifiServer) {
+        WiFiClient newWifi = g_simTcpWifiServer->accept();
+        if (newWifi) {
+            bool ok = false;
+            for (int i = 0; i < 2; i++) {
+                if (!g_simTcpWifiClients[i] || !g_simTcpWifiClients[i].connected()) {
+                    g_simTcpWifiClients[i] = newWifi; ok = true; break;
+                }
+            }
+            if (!ok) newWifi.stop();
+        }
+        for (int i = 0; i < 2; i++) processGenericTcpClient(g_simTcpWifiClients[i], 1);
     }
 }
 
@@ -679,10 +689,19 @@ void simulatorLoop() {
         }
 
         if (g_simConfig.tcpEnabled) {
-            if (g_simTcpServer) delete g_simTcpServer;
-            g_simTcpServer = new EspEthernetServer(g_simConfig.tcpPort);
-            g_simTcpServer->begin();
-            APP_LOG("[Simulator] TCP Server started on port %d", g_simConfig.tcpPort);
+            uint8_t net = g_simConfig.netInterface; 
+            if (net == 0 || net == 1) { // W5500
+                if (g_simTcpEthServer) delete g_simTcpEthServer;
+                g_simTcpEthServer = new EspEthernetServer(g_simConfig.tcpPort);
+                g_simTcpEthServer->begin();
+                APP_LOG("[Simulator] TCP Server (Ethernet) started on port %d", g_simConfig.tcpPort);
+            }
+            if (net == 0 || net == 2) { // WiFi
+                if (g_simTcpWifiServer) delete g_simTcpWifiServer;
+                g_simTcpWifiServer = new WiFiServer(g_simConfig.tcpPort);
+                g_simTcpWifiServer->begin();
+                APP_LOG("[Simulator] TCP Server (WiFi) started on port %d", g_simConfig.tcpPort);
+            }
         }
         netStarted = true;
     }

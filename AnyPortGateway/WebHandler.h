@@ -112,7 +112,7 @@ static void handleHttpRoot() {
       "h2{border-bottom:2px solid #336699;padding-bottom:5px;color:#336699} "
       ".card{background:white;padding:15px;border-radius:8px;box-shadow:0 2px "
       "5px rgba(0,0,0,0.1);margin-bottom:20px} "
-      "label{display:inline-block;width:140px;margin-bottom:8px;white-space:"
+      "label{display:inline-block;width:160px;margin-bottom:8px;white-space:"
       "nowrap} input,select{padding:6px;border:1px solid "
       "#ccc;border-radius:4px;margin-bottom:10px;width:200px} "
       "table{width:100%;border-collapse:collapse} th,td{padding:8px;border:1px "
@@ -151,6 +151,9 @@ static void handleHttpRoot() {
           g_mdnsName + ".local 进行访问</span><br>";
   html += "<label>工作模式:</label><select name='workMode' "
           "onchange='uiToggleMode(this.value)'>";
+  html += "<option value='4'" +
+          String(g_workMode == WorkMode::FIRMWARE_UPDATE ? " selected" : "") +
+          ">系统固件更新模式</option>";
   html += "<option value='0'" +
           String(g_workMode == WorkMode::GATEWAY ? " selected" : "") +
           ">MQTT 网关模式</option>";
@@ -162,10 +165,10 @@ static void handleHttpRoot() {
           ">USB 转 RS485 透传模式</option>";
   html += "<option value='3'" +
           String(g_workMode == WorkMode::BRIDGE ? " selected" : "") +
-          ">协议互转模式</option>";
-  html += "<option value='4'" +
-          String(g_workMode == WorkMode::FIRMWARE_UPDATE ? " selected" : "") +
-          ">系统固件更新模式</option>";
+          ">RTU-TCP 协议互转模式</option>";
+  html += "<option value='5'" +
+          String(g_workMode == WorkMode::ETH_WIFI_BRIDGE ? " selected" : "") +
+          ">WiFi 转以太网透传模式</option>";
   html += "</select>";
   html +=
       "<span class='badge'>当前运行模式: " +
@@ -174,7 +177,7 @@ static void handleHttpRoot() {
                  : (g_workMode == WorkMode::SIMULATOR
                         ? "从站模拟器"
                         : (g_workMode == WorkMode::TRANSPARENT ? "USB 透传"
-                                                               : (g_workMode == WorkMode::BRIDGE ? "协议互转" : "系统固件更新")))) +
+                                                               : (g_workMode == WorkMode::BRIDGE ? "RTU-TCP 协议互转" : (g_workMode == WorkMode::FIRMWARE_UPDATE ? "系统固件更新" : "WiFi 转以太网透传"))))) +
       "</span>";
   html += "</div>";
 
@@ -287,6 +290,10 @@ static void handleHttpRoot() {
   html +=
       "<label>监听端口:</label><input name='simTcpPort' type='number' value='" +
       String(g_simConfig.tcpPort) + "' style='width:60px'><br>";
+  html += "<label>网络接口:</label><select name='simNetInt'>";
+  html += "<option value='0' " + String(g_simConfig.netInterface == 0 ? "selected" : "") + ">自动 (WiFi + W5500)</option>";
+  html += "<option value='1' " + String(g_simConfig.netInterface == 1 ? "selected" : "") + ">仅以太网 (W5500)</option>";
+  html += "<option value='2' " + String(g_simConfig.netInterface == 2 ? "selected" : "") + ">仅 WiFi</option></select>";
   html += "</div>";
   html += "<h3>报文监听 (Sniffer)</h3>";
   html += "<label>启用监听:</label><input type='checkbox' "
@@ -351,7 +358,7 @@ static void handleHttpRoot() {
   // 4.5 模式 D: 协议互转配置
   html += "<div id='secBridge' class='card' style='display:" +
           String(g_workMode == WorkMode::BRIDGE ? "block" : "none") + "'>";
-  html += "<h2>协议互转配置 (Modbus TCP <-> RTU)</h2>";
+  html += "<h2>RTU-TCP 协议互转配置</h2>";
   html += "<h3>转换方向</h3>";
   html += "<label>转换方向:</label><select name='bDir' "
           "onchange='uiToggleBridge(this.value)'>";
@@ -393,6 +400,10 @@ static void handleHttpRoot() {
   html +=
       "<label>监听端口:</label><input name='bTcpPort' type='number' value='" +
       String(g_bridgeConfig.tcpPort) + "'><br>";
+  html += "<label>网络接口:</label><select name='bNetInt'>";
+  html += "<option value='0' " + String(g_bridgeConfig.netInterface == 0 ? "selected" : "") + ">自动 (WiFi + W5500)</option>";
+  html += "<option value='1' " + String(g_bridgeConfig.netInterface == 1 ? "selected" : "") + ">仅以太网 (W5500)</option>";
+  html += "<option value='2' " + String(g_bridgeConfig.netInterface == 2 ? "selected" : "") + ">仅 WiFi</option></select>";
   html += "</div>";
 
   html += "<div id='bridgeTcpClient' style='display:" +
@@ -482,6 +493,16 @@ static void handleHttpRoot() {
       html += "      <button type='button' id='btnDoUpdate' style='margin-top:10px;margin-left:10px;background:#dc3545;display:none' onclick='uiDoUpdate()'>立即升级</button>";
     }
   html += "</div>";
+  
+  // 8. 模式 E: WiFi 转以太网透传模式配置
+  html += "<div id='secEthWifi' class='card' style='display:" +
+          String(g_workMode == WorkMode::ETH_WIFI_BRIDGE ? "block" : "none") + "'>";
+  html += "<h2>WiFi 转以太网透传模式配置</h2>";
+  html += "<p style='color:#336699;font-size:13px;background:#e7f3ff;padding:8px;border-radius:4px;border:1px solid #b8daff'><b>💡 说明：</b>AnyPort 将在 WiFi 接口上开启监听，并将接收到的数据转发给以太网引脚连接的特定 IP 设备。</p>";
+  html += "<label>监听端口 (WiFi):</label><input name='ewLPort' type='number' value='" + String(g_ethWifiConfig.listenPort) + "'><br>";
+  html += "<label>目标 IP (Ethernet):</label><input name='ewTIp' value='" + g_ethWifiConfig.targetIp + "'><br>";
+  html += "<label>目标端口 (Ethernet):</label><input name='ewTPort' type='number' value='" + String(g_ethWifiConfig.targetPort) + "'><br>";
+  html += "</div>";
 
   html += "<button type='submit' class='save-btn'>保存并重启设备</button>";
   html += "</form>";
@@ -496,7 +517,8 @@ static void handleHttpRoot() {
       "document.getElementById('secMonitor').style.display=(m=='1'?'block':'none'); "
       "document.getElementById('secTransparent').style.display=(m=='2'?'block':'none'); "
       "document.getElementById('secBridge').style.display=(m=='3'?'block':'none'); "
-      "document.getElementById('secOta').style.display=(m=='4'?'block':'none'); }";
+      "document.getElementById('secOta').style.display=(m=='4'?'block':'none'); "
+      "document.getElementById('secEthWifi').style.display=(m=='5'?'block':'none'); }";
   html += "function uiToggleBridge(d){ "
           "document.getElementById('bridgeTcpServer').style.display=(d=='0'?'"
           "block':'none'); "
@@ -623,6 +645,7 @@ static void handleHttpRoot() {
           "0].value),unitId:parseInt(document.getElementsByName('simUnitId')[0]"
           ".value),tcpEnabled:document.getElementsByName('simTcpEnabled')[0]."
           "value=='1',tcpPort:parseInt(document.getElementsByName('simTcpPort')"
+          "[0].value),netInterface:parseInt(document.getElementsByName('simNetInt')"
           "[0].value),monitorEnabled:document.getElementsByName('"
           "simMonitorEnabled')[0].checked,monitorFilter:parseInt(document."
           "getElementsByName('simMonitorFilter')[0].value)};";
@@ -639,8 +662,13 @@ static void handleHttpRoot() {
   html += "async function uiCheckOta(){ "
           "let s=document.getElementById('otaInfo'); s.innerText='正在连接云端服务...'; "
           "try{ let r=await fetch('/api/ota/check'); let data=await r.json(); "
-          "if(data.found){ s.innerHTML=`<div style='margin-bottom:10px'><b style='color:#28a745;font-size:16px'>发现新版本: v${data.version}</b></div>"
-          "<div style='font-size:13px;color:#444;background:#f8f9fa;padding:12px;border-radius:6px;border-left:4px solid #17a2b8;white-space:pre-wrap;line-height:1.5;text-align:left'>${data.changelog}</div>`; "
+          "if(data.found){ "
+          "let mdLog = data.changelog.replace(/</g, '&lt;').replace(/>/g, '&gt;')"
+          ".replace(/^###\\s+(.*)/gm, '<span style=\"font-size:15px;font-weight:bold;color:#17a2b8;display:inline-block;margin-top:8px\">$1</span>')"
+          ".replace(/\\*\\*(.*?)\\*\\*/g, '<b style=\"color:#222\">$1</b>')"
+          ".replace(/`(.*?)`/g, '<code style=\"background:#e9ecef;padding:2px 5px;border-radius:4px;color:#d63384\">$1</code>'); "
+          "s.innerHTML=`<div style='margin-bottom:10px'><b style='color:#28a745;font-size:16px'>发现新版本: v${data.version}</b></div>"
+          "<div style='font-size:13px;color:#444;background:#f8f9fa;padding:12px;border-radius:6px;border-left:4px solid #17a2b8;white-space:pre-wrap;line-height:1.6;text-align:left'>${mdLog}</div>`; "
           "document.getElementById('btnDoUpdate').style.display='inline-block'; } "
           "else { s.innerText='当前已是最新版本 ('+data.version+')'; } "
           "}catch(e){ s.innerText='检测失败，请检查网络连接'; } }";
@@ -794,11 +822,12 @@ static void handleHttpConfig() {
   }
 
   // Bridge 模式保存
-  String bDir = g_httpServer.arg("bDir");
-  if (bDir.length() > 0) {
-    g_bridgeConfig.direction = bDir.toInt();
+  String bDirStr = g_httpServer.arg("bDir");
+  if (bDirStr.length() > 0) {
+    g_bridgeConfig.direction = bDirStr.toInt();
     g_bridgeConfig.bridgeMode = g_httpServer.arg("bMode").toInt();
-    g_bridgeConfig.slaveId = g_httpServer.arg("bSlaveId").toInt();
+    g_bridgeConfig.slaveId = (uint8_t)g_httpServer.arg("bSlaveId").toInt();
+    g_bridgeConfig.netInterface = (uint8_t)g_httpServer.arg("bNetInt").toInt();
     g_bridgeConfig.tcpPort = g_httpServer.arg("bTcpPort").toInt();
     g_bridgeConfig.targetIp = g_httpServer.arg("bTargetIp");
     g_bridgeConfig.targetPort = g_httpServer.arg("bTargetPort").toInt();
@@ -810,6 +839,7 @@ static void handleHttpConfig() {
     g_prefs.putUChar("bDir", g_bridgeConfig.direction);
     g_prefs.putUChar("bMode", g_bridgeConfig.bridgeMode);
     g_prefs.putUChar("bSlaveId", g_bridgeConfig.slaveId);
+    g_prefs.putUChar("bNetInt", g_bridgeConfig.netInterface);
     g_prefs.putUShort("bTcpPort", g_bridgeConfig.tcpPort);
     g_prefs.putString("bTargetIp", g_bridgeConfig.targetIp);
     g_prefs.putUShort("bTargetPort", g_bridgeConfig.targetPort);
@@ -817,6 +847,18 @@ static void handleHttpConfig() {
     g_prefs.putUChar("bData", g_bridgeConfig.dataBits);
     g_prefs.putUChar("bParity", g_bridgeConfig.parity);
     g_prefs.putUChar("bStop", g_bridgeConfig.stopBits);
+  }
+
+  // Eth-WiFi Bridge 保存
+  String ewLPort = g_httpServer.arg("ewLPort");
+  if (ewLPort.length() > 0) {
+      g_ethWifiConfig.listenPort = (uint16_t)ewLPort.toInt();
+      g_ethWifiConfig.targetIp = g_httpServer.arg("ewTIp");
+      g_ethWifiConfig.targetPort = (uint16_t)g_httpServer.arg("ewTPort").toInt();
+      
+      g_prefs.putUShort("ewLPort", g_ethWifiConfig.listenPort);
+      g_prefs.putString("ewTIp", g_ethWifiConfig.targetIp);
+      g_prefs.putUShort("ewTPort", g_ethWifiConfig.targetPort);
   }
 
   g_prefs.end();

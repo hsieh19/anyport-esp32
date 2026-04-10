@@ -29,7 +29,9 @@ uint8_t g_transDataBits = 8;
 uint8_t g_transParity = 0; // 0:None, 1:Even, 2:Odd
 uint8_t g_transStopBits = 1;
 
-BridgeConfig g_bridgeConfig = {0, 0, 1, 502, "", 502, 9600, 1, 0, 8};
+BridgeConfig g_bridgeConfig = {0, 0, 1, 0, 502, "", 502, 9600, 1, 0, 8};
+EthWifiConfig g_ethWifiConfig = {502, "192.168.1.100", 502, 0};
+NetInterface g_netInterface = NetInterface::AUTO;
 
 WebServer g_httpServer(80);
 uint8_t g_rtuRxBuffer[512] __attribute__((aligned(4)));
@@ -49,6 +51,7 @@ unsigned long g_lastHeartbeatMs = 0;
 #include "SimulatorCore.h"
 #include "SimulatorWeb.h"
 #include "BridgeHandler.h"
+#include "EthWifiHandler.h"
 #include "TransparentHandler.h"
 
 // -----------------------
@@ -113,6 +116,7 @@ static void loadPersistentConfig() {
     g_bridgeConfig.direction = g_prefs.getUChar("bDir", 0);
     g_bridgeConfig.bridgeMode = g_prefs.getUChar("bMode", 0);
     g_bridgeConfig.slaveId = g_prefs.getUChar("bSlaveId", 1);
+    g_bridgeConfig.netInterface = g_prefs.getUChar("bNetInt", 0);
     g_bridgeConfig.tcpPort = g_prefs.getUShort("bTcpPort", 502);
     g_bridgeConfig.targetIp = g_prefs.getString("bTargetIp", "192.168.1.100");
     g_bridgeConfig.targetPort = g_prefs.getUShort("bTargetPort", 502);
@@ -120,6 +124,12 @@ static void loadPersistentConfig() {
     g_bridgeConfig.dataBits = g_prefs.getUChar("bData", 8);
     g_bridgeConfig.parity = g_prefs.getUChar("bParity", 0);
     g_bridgeConfig.stopBits = g_prefs.getUChar("bStop", 1);
+
+    // Eth-WiFi Bridge 加载
+    g_ethWifiConfig.listenPort = g_prefs.getUShort("ewLPort", 502);
+    g_ethWifiConfig.targetIp = g_prefs.getString("ewTIp", "192.168.1.100");
+    g_ethWifiConfig.targetPort = g_prefs.getUShort("ewTPort", 502);
+    g_ethWifiConfig.protocol = g_prefs.getUChar("ewProto", 0);
 
     g_prefs.end();
 }
@@ -160,6 +170,8 @@ void anyportGatewayLoop() {
         loopTransparentMode();
     } else if (g_workMode == WorkMode::BRIDGE) {
         bridgeLoop();
+    } else if (g_workMode == WorkMode::ETH_WIFI_BRIDGE) {
+        ethWifiBridgeLoop();
     }
 
     otaAutoCheckLoop();

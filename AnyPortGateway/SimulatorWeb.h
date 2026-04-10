@@ -99,7 +99,9 @@ static void handleGetSimConfig(WebServer& server) {
     doc["dataBits"] = g_simConfig.dataBits;
     doc["unitId"] = g_simConfig.unitId;
     doc["tcpEnabled"] = g_simConfig.tcpEnabled;
+    doc["tcpEnabled"] = g_simConfig.tcpEnabled;
     doc["tcpPort"] = g_simConfig.tcpPort;
+    doc["netInterface"] = g_simConfig.netInterface;
     doc["monitorEnabled"] = g_simConfig.monitorEnabled;
     doc["monitorFilter"] = g_simConfig.monitorFilter;
 
@@ -124,7 +126,9 @@ static void handleUpdateSimConfig(WebServer& server) {
     g_simConfig.dataBits = doc["dataBits"] | 8;
     g_simConfig.unitId = doc["unitId"] | 1;
     g_simConfig.tcpEnabled = doc["tcpEnabled"] | false;
+    g_simConfig.tcpEnabled = doc["tcpEnabled"] | false;
     g_simConfig.tcpPort = doc["tcpPort"] | 502;
+    g_simConfig.netInterface = doc["netInterface"] | 0;
     g_simConfig.monitorEnabled = doc["monitorEnabled"] | false;
     g_simConfig.monitorFilter = doc["monitorFilter"] | 0;
     

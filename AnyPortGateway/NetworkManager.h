@@ -25,7 +25,7 @@ inline bool parseIpAddress(const char *str, IPAddress &outIp) {
 
 /**
  * @brief 强制 W5500 PHY 软复位，触发重新 Auto-Negotiation
- * 
+ *
  * W5500 PHYCFGR 寄存器 (地址 0x002E, Common Register Block):
  *   Bit 7: RST   - 0=触发复位, 1=正常运行
  *   Bit 6: OPMD  - 0=硬件配置, 1=软件配置
@@ -109,7 +109,8 @@ static void resetW5500Phy(uint8_t opmdc, bool hardwareMode) {
 static bool waitForLink(unsigned long timeoutMs) {
   unsigned long start = millis();
   while (millis() - start < timeoutMs) {
-    if (Ethernet.linkStatus() == LinkON) return true;
+    if (Ethernet.linkStatus() == LinkON)
+      return true;
     delay(100);
   }
   return false;
@@ -216,7 +217,7 @@ static void syncNtpTime() {
 }
 
 static void initSpiAndEthernet() {
-  // === 步骤 1: 先做硬件复位，再启动 SPI ===
+  // === 步骤 1: 硬件复位 ===
   pinMode(PIN_W5500_CS, OUTPUT);
   digitalWrite(PIN_W5500_CS, HIGH);
   pinMode(PIN_W5500_RST, OUTPUT);
@@ -226,12 +227,14 @@ static void initSpiAndEthernet() {
   digitalWrite(PIN_W5500_RST, HIGH);
   delay(300);
 
-  // === 步骤 2: 硬件复位完成后，再启动 SPI ===
+  // === 步骤 2: 启动 SPI ===
   pinMode(PIN_W5500_INT, INPUT_PULLUP);
   SPI.begin(PIN_W5500_SCK, PIN_W5500_MISO, PIN_W5500_MOSI, -1);
   Ethernet.init(static_cast<uint8_t>(PIN_W5500_CS));
 
   // === 步骤 3: 初始化 MAC/IP ===
+  // 必须先调用 applyEthConfig (内部执行 Ethernet.begin)
+  // 因为 hardwareStatus() 依赖 Ethernet.begin 触发的 softReset
   applyEthConfig();
 
   uint8_t hwStatus = Ethernet.hardwareStatus();
@@ -240,63 +243,18 @@ static void initSpiAndEthernet() {
     return;
   }
   APP_LOG("[W5500] Hardware detected (chip: %d)", hwStatus);
+  APP_LOG("[W5500] IP: %s", Ethernet.localIP().toString().c_str());
 
-  // === 步骤 4: MAC 地址抖动 ===
-  // 两台 W5500 同时上电时制造确定性启动偏差
-  unsigned long jitter = (((unsigned long)g_macAddress[4] << 8) | g_macAddress[5]) % 2001;
-  APP_LOG("[W5500] PHY init jitter: %lu ms", jitter);
-  if (jitter > 0) delay(jitter);
-
-  // 读取当前 PHYCFGR 状态（诊断用）
-  uint8_t phyCfg = readPhyCfgr();
-  APP_LOG("[W5500] PHYCFGR after init: 0x%02X", phyCfg);
-
-  // === 步骤 5: 多轮自适应链路建立 ===
-  //
-  // Round 0: 不碰 PHYCFGR，使用硬件复位后的自然状态
-  //   W5100.init() 中的 softReset 已将 PHY 恢复出厂默认 (PHYCFGR=0xB8)
-  //   PHY 在 OPMD=0 (硬件模式) + AN + Auto-MDIX，这是最原生的状态
-  //   对于正常模块，无论是连路由器还是直连另一个 W5500，都应该能自然建链
-  //
-  // Round 1: 通过 PHYCFGR 显式触发 PHY 软复位 (OPMD=0)
-  //   如果 Round 0 失败，PHY 可能卡在异常状态
-  //   做一次干净的 PHY 复位，保持硬件模式
-  //
-  // Round 2: 强制 100M Full Duplex (OPMD=1, OPMDC=011)
-  //   给有缺陷的模块连路由器/交换机（路由器自带 Auto-MDIX 不受影响）
-
-  // --- Round 0: 自然建链（最小干预）---
-  APP_PRINTLN("[W5500] Round 0: Waiting for natural link...");
-  if (waitForLink(5000)) {
-    APP_PRINTLN("[W5500] Link UP (natural)");
-    return;
+  // === 步骤 4: 快速链路检查 ===
+  APP_PRINTLN("[W5500] Checking Link...");
+  if (!waitForLink(2000)) {
+    resetW5500Phy(0x07, true);
+    if (!waitForLink(2000)) {
+      APP_PRINTLN("[W5500] Link DOWN.");
+      return;
+    }
   }
-
-  // --- Round 1: PHY 软复位（硬件模式）---
-  APP_PRINTLN("[W5500] Round 1: PHY reset (HW mode)...");
-  resetW5500Phy(0x07, true);
-  if (waitForLink(5000)) {
-    APP_PRINTLN("[W5500] Link UP (HW mode PHY reset)");
-    return;
-  }
-
-  // --- Round 2: 强制 100M FD（软件模式）---
-  APP_PRINTLN("[W5500] Round 2: Forced 100M FD (SW mode)...");
-  resetW5500Phy(0x03, false);
-  if (waitForLink(3000)) {
-    APP_PRINTLN("[W5500] Link UP (Forced 100M FD)");
-    return;
-  }
-
-  // --- Round 3: 恢复硬件模式（给对端设备第二次机会）---
-  APP_PRINTLN("[W5500] Round 3: Back to HW mode...");
-  resetW5500Phy(0x07, true);
-  if (waitForLink(5000)) {
-    APP_PRINTLN("[W5500] Link UP (HW mode, retry)");
-    return;
-  }
-
-  APP_PRINTLN("[W5500] Link DOWN (no peer detected)");
+  APP_PRINTLN("[W5500] Link UP.");
 }
 
 static void initMdns() {
