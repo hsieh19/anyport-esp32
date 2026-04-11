@@ -123,12 +123,13 @@ static void handleHttpRoot() {
       "background:#28a745} .badge{display:inline-block;padding:2px "
       "10px;border-radius:15px;font-size:13px;margin-left:10px;background:#"
       "d1ecf1;color:#0c5460;border:1px solid "
-      "#bee5eb;vertical-align:middle;font-weight:bold}</style>";
+      "#bee5eb;vertical-align:middle;font-weight:bold} .reward-link{cursor:pointer;font-size:13px;color:#e67e22;margin-left:15px;text-decoration:none} .reward-link:hover{text-decoration:underline} .modal{display:none;position:fixed;z-index:9999;left:0;top:0;width:100%;height:100%;background:rgba(0,0,0,0.6);backdrop-filter:blur(3.5px)} .modal-content{background:white;margin:10% auto;padding:25px;border-radius:12px;width:340px;text-align:center;box-shadow:0 10px 30px rgba(0,0,0,0.3);position:relative;animation:modalFade 0.3s} @keyframes modalFade{from{opacity:0;transform:translateY(-20px)}to{opacity:1;transform:translateY(0)}} .close-modal{position:absolute;right:15px;top:10px;font-size:24px;cursor:pointer;color:#999} .close-modal:hover{color:#333}</style>";
   html += "</head><body>";
   html += "<h1 id='mainTitle'>AnyPort 智能网关控制面板 v" FIRMWARE_VERSION;
   if (g_otaUpdateFound) {
       html += "<span id='otaBadge' class='badge' style='background:#dc3545;color:white;border-color:#bd2130'>有新版本</span>";
   }
+  html += "<span class='reward-link' onclick='uiToggleReward(true)'>☕ 赞赏作者</span>";
   html += "<span style='font-size:14px;color:#666;font-weight:normal;margin-left:15px'>© 2026 Hotwon-CD2-Hsieh</span></h1>";
   html += "<form id='mainForm' method='POST' action='/config'>";
 
@@ -522,6 +523,14 @@ static void handleHttpRoot() {
   html += "<button type='submit' class='save-btn'>保存并重启设备</button>";
   html += "</form>";
 
+  // 赞赏弹窗 HTML
+  html += "<div id='rewardModal' class='modal' onclick='if(event.target==this)uiToggleReward(false)'>";
+  html += "<div class='modal-content'><span class='close-modal' onclick='uiToggleReward(false)'>&times;</span>";
+  html += "<h2 style='margin-top:0;color:#e67e22'>⚡ 赞赏支持</h2>";
+  html += "<p style='font-size:14px;color:#666;text-align:left;line-height:1.6'>非常感谢您的认可！您的支持是 AnyPort 持续优化的最大动力。</p>";
+  html += "<img src='" + String(OTA_API_BASE) + "/reward.png' style='width:310px;height:auto;border-radius:8px;border:1px solid #eee;'>";
+  html += "<p style='font-size:12px;color:#999;margin-top:15px'>微信扫码赞赏作者</p></div></div>";
+
   html += "<script>";
   html +=
       "function uiToggleMode(m){ "
@@ -542,6 +551,7 @@ static void handleHttpRoot() {
   html += "function uiToggleBridgeMode(m){ "
           "document.getElementById('bridgeSlaveId').style.display=(m=='1'?'"
           "block':'none'); }";
+  html += "function uiToggleReward(s){ document.getElementById('rewardModal').style.display=s?'block':'none'; }";
   html += "function "
           "addRegRow(d={addr:40001,name:'',targetVal:0,val:0,type:4,endian:0,"
           "isDyn:false,dynInterval:1,dynMode:0,min:0,max:100}){";
