@@ -246,7 +246,7 @@ static void handleHttpRoot() {
           ">禁用</option></select>";
   html += "<div id='simRtuExt' style='display:" +
           String(g_simConfig.rtuEnabled ? "block" : "none") + "'>";
-  html += "<label>从站地址码:</label><input name='simUnitId' type='number' "
+  html += "<label>从站 ID (1-247):</label><input name='simUnitId' type='number' "
           "value='" +
           String(g_simConfig.unitId) + "' style='width:60px'><br>";
   html += "<label>波特率:</label><select name='simBaud'>";
@@ -288,6 +288,9 @@ static void handleHttpRoot() {
           ">禁用</option></select>";
   html += "<div id='simTcpExt' style='display:" +
           String(g_simConfig.tcpEnabled ? "block" : "none") + "'>";
+  html += "<label>从站 ID (1-247):</label><input name='simTcpUnitId' type='number' "
+          "value='" +
+          String(g_simConfig.tcpUnitId) + "' style='width:60px'><br>";
   html +=
       "<label>监听端口:</label><input name='simTcpPort' type='number' value='" +
       String(g_simConfig.tcpPort) + "' style='width:60px'><br>";
@@ -668,7 +671,7 @@ static void handleHttpRoot() {
           "value),stopBits:parseInt(document.getElementsByName('simStop')[0]."
           "value),dataBits:parseInt(document.getElementsByName('simDataBits')["
           "0].value),unitId:parseInt(document.getElementsByName('simUnitId')[0]"
-          ".value),tcpEnabled:document.getElementsByName('simTcpEnabled')[0]."
+          ".value),tcpUnitId:parseInt(document.getElementsByName('simTcpUnitId')[0].value),tcpEnabled:document.getElementsByName('simTcpEnabled')[0]."
           "value=='1',tcpPort:parseInt(document.getElementsByName('simTcpPort')"
           "[0].value),netInterface:parseInt(document.getElementsByName('simNetInt')"
           "[0].value),monitorEnabled:document.getElementsByName('"

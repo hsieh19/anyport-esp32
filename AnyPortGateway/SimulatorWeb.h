@@ -98,6 +98,7 @@ static void handleGetSimConfig(WebServer& server) {
     doc["parity"] = g_simConfig.parity;
     doc["dataBits"] = g_simConfig.dataBits;
     doc["unitId"] = g_simConfig.unitId;
+    doc["tcpUnitId"] = g_simConfig.tcpUnitId;
     doc["tcpEnabled"] = g_simConfig.tcpEnabled;
     doc["tcpEnabled"] = g_simConfig.tcpEnabled;
     doc["tcpPort"] = g_simConfig.tcpPort;
@@ -125,6 +126,7 @@ static void handleUpdateSimConfig(WebServer& server) {
     g_simConfig.parity = doc["parity"] | 0;
     g_simConfig.dataBits = doc["dataBits"] | 8;
     g_simConfig.unitId = doc["unitId"] | 1;
+    g_simConfig.tcpUnitId = doc["tcpUnitId"] | 1;
     g_simConfig.tcpEnabled = doc["tcpEnabled"] | false;
     g_simConfig.tcpEnabled = doc["tcpEnabled"] | false;
     g_simConfig.tcpPort = doc["tcpPort"] | 502;

@@ -69,7 +69,8 @@ struct SimulatorGlobalConfig {
     uint8_t stopBits;    // 1 或 2
     uint8_t parity;      // 0:None, 1:Even, 2:Odd
     uint8_t dataBits;    // 7 或 8
-    uint8_t unitId;      // 从站地址码
+    uint8_t unitId;      // RTU 从站地址码
+    uint8_t tcpUnitId;   // TCP 从站地址码
     bool tcpEnabled;
     uint16_t tcpPort;
     uint8_t netInterface; // 0: Auto, 1: W5500, 2: WiFi
@@ -81,7 +82,7 @@ struct SimulatorGlobalConfig {
 static const size_t MAX_SIM_VARIABLES = 32;
 static SimulatorVariable g_simVariables[MAX_SIM_VARIABLES];
 static size_t g_simVarCount = 0;
-static SimulatorGlobalConfig g_simConfig = {true, 9600, 1, 0, 8, 1, true, 502, 0, false, 0};
+static SimulatorGlobalConfig g_simConfig = {true, 9600, 1, 0, 8, 1, 1, true, 502, 0, false, 0};
 
 // 报文监听循环缓冲区
 struct MonitorLog {
@@ -101,7 +102,8 @@ static void addMonitorLog(bool isOutgoing, uint8_t type, const uint8_t* data, si
     
     // 过滤逻辑：本站报文过滤（针对本站地址或响应）
     if (g_simConfig.monitorFilter == 1 && len > 0) {
-        if (data[0] != g_simConfig.unitId) return;
+        uint8_t expectedId = (type == 0) ? g_simConfig.unitId : g_simConfig.tcpUnitId;
+        if (data[0] != expectedId) return;
     }
 
     size_t index = (g_monitorHead + g_monitorCount) % MAX_MONITOR_LOGS;
@@ -404,13 +406,13 @@ static uint16_t calculateCRC(uint8_t* buf, int len) {
  * @brief 处理 Modbus 功能码并生成响应
  * @return 响应长度，0 表示不响应或地址错误
  */
-static int handleModbusFrame(uint8_t* frame, int len, uint8_t* outResponse) {
+static int handleModbusFrame(uint8_t* frame, int len, uint8_t* outResponse, uint8_t expectedUnitId) {
     if (len < 4) return 0;
     
     uint8_t unitId = frame[0];
     
-    // 关键修复：仅当 Unit ID 匹配模拟器配置的地址时才响应
-    if (unitId != g_simConfig.unitId) return 0;
+    // 仅当 Unit ID 匹配配置的地址时才响应
+    if (unitId != expectedUnitId) return 0;
 
     uint8_t funcCode = frame[1];
     uint16_t ra = (frame[2] << 8) | frame[3]; // ra = raw offset from master
@@ -514,7 +516,7 @@ static void handleRtuSerial() {
         if (calculateCRC(buf, len - 2) != receivedCrc) return;
 
         uint8_t response[256];
-        int respLen = handleModbusFrame(buf, len - 2, response);
+        int respLen = handleModbusFrame(buf, len - 2, response, g_simConfig.unitId);
         if (respLen > 0) {
             uint16_t crc = calculateCRC(response, respLen);
             response[respLen++] = crc & 0xFF;
@@ -563,7 +565,7 @@ static void processGenericTcpClient(Client& client, uint8_t type) {
                 addMonitorLog(false, type, fullReq, 6 + len);
 
                 uint8_t responsePdu[256];
-                int respPduLen = handleModbusFrame(pdu, len, responsePdu);
+                int respPduLen = handleModbusFrame(pdu, len, responsePdu, g_simConfig.tcpUnitId);
                 
                 if (respPduLen > 0) {
                     uint8_t respFrame[263];
