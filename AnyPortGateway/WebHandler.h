@@ -4,6 +4,7 @@
 #include "SimulatorCore.h"
 #include "SimulatorWeb.h"
 #include "OtaHandler.h"
+#include "esp_ota_ops.h"
 
 // -----------------------
 // 1. MQTT 消息路由
@@ -100,37 +101,66 @@ void handleMqttRequestMessage(const String &topic, const uint8_t *payload,
 // 2. Web 路由逻辑
 // -----------------------
 
+static const char PAGE_CSS[] PROGMEM =
+    "body{font-family:sans-serif;margin:20px;background:#f4f4f4} "
+    "h2{border-bottom:2px solid #336699;padding-bottom:5px;color:#336699} "
+    ".card{background:white;padding:15px;border-radius:8px;box-shadow:0 2px "
+    "5px rgba(0,0,0,0.1);margin-bottom:20px} "
+    "label{display:inline-block;width:160px;margin-bottom:8px;white-space:"
+    "nowrap} input,select{padding:6px;border:1px solid "
+    "#ccc;border-radius:4px;margin-bottom:10px;width:200px} "
+    "table{width:100%;border-collapse:collapse} th,td{padding:8px;border:1px "
+    "solid #ddd;text-align:center} button{padding:10px "
+    "20px;background:#336699;color:white;border:none;border-radius:4px;"
+    "cursor:pointer} "
+    ".save-btn{display:block;width:100%;font-size:18px;margin-top:20px;"
+    "background:#28a745} .badge{display:inline-block;padding:2px "
+    "10px;border-radius:15px;font-size:13px;margin-left:10px;background:#"
+    "d1ecf1;color:#0c5460;border:1px solid "
+    "#bee5eb;vertical-align:middle;font-weight:bold} "
+    ".reward-link{cursor:pointer;font-size:13px;color:#e67e22;margin-left:15px;"
+    "text-decoration:none} .reward-link:hover{text-decoration:underline} "
+    ".modal{display:none;position:fixed;z-index:9999;left:0;top:0;width:100%;"
+    "height:100%;background:rgba(0,0,0,0.6);backdrop-filter:blur(3.5px)} "
+    ".modal-content{background:white;margin:10% auto;padding:25px;border-radius:"
+    "12px;width:340px;text-align:center;box-shadow:0 10px 30px rgba(0,0,0,0.3);"
+    "position:relative;animation:modalFade 0.3s} @keyframes modalFade{from{"
+    "opacity:0;transform:translateY(-20px)}to{opacity:1;transform:translateY(0)}} "
+    ".close-modal{position:absolute;right:15px;top:10px;font-size:24px;cursor:"
+    "pointer;color:#999} .close-modal:hover{color:#333}";
+
+static const char REWARD_MODAL_HTML[] PROGMEM =
+    "<div id='rewardModal' class='modal' onclick='if(event.target==this)"
+    "uiToggleReward(false)'><div class='modal-content'><span class='close-modal' "
+    "onclick='uiToggleReward(false)'>&times;</span><h2 "
+    "style='margin-top:0;color:#e67e22'>⚡ 赞赏支持</h2><p "
+    "style='font-size:14px;color:#666;text-align:center;line-height:1.6;white-space:nowrap'>"
+    "您的支持是 AnyPort 持续优化的最大动力。</p><img src='" OTA_API_BASE
+    "/reward.png' "
+    "style='width:310px;height:auto;border-radius:8px;border:1px solid #eee;'><p "
+    "style='font-size:12px;color:#999;margin-top:15px'>微信扫码赞赏作者</p></div>"
+    "</div>";
+
 static void handleHttpRoot() {
   String html;
-  html.reserve(8192);
+  html.reserve(4096);
+  g_httpServer.setContentLength(CONTENT_LENGTH_UNKNOWN);
+  g_httpServer.send(200, "text/html; charset=utf-8", "");
   html +=
       "<!DOCTYPE html><html><head><meta charset='utf-8'><meta name='viewport' "
       "content='width=device-width,initial-scale=1'><title>AnyPort 配置 "
       "v" FIRMWARE_VERSION "</title>";
-  html +=
-      "<style>body{font-family:sans-serif;margin:20px;background:#f4f4f4} "
-      "h2{border-bottom:2px solid #336699;padding-bottom:5px;color:#336699} "
-      ".card{background:white;padding:15px;border-radius:8px;box-shadow:0 2px "
-      "5px rgba(0,0,0,0.1);margin-bottom:20px} "
-      "label{display:inline-block;width:160px;margin-bottom:8px;white-space:"
-      "nowrap} input,select{padding:6px;border:1px solid "
-      "#ccc;border-radius:4px;margin-bottom:10px;width:200px} "
-      "table{width:100%;border-collapse:collapse} th,td{padding:8px;border:1px "
-      "solid #ddd;text-align:center} button{padding:10px "
-      "20px;background:#336699;color:white;border:none;border-radius:4px;"
-      "cursor:pointer} "
-      ".save-btn{display:block;width:100%;font-size:18px;margin-top:20px;"
-      "background:#28a745} .badge{display:inline-block;padding:2px "
-      "10px;border-radius:15px;font-size:13px;margin-left:10px;background:#"
-      "d1ecf1;color:#0c5460;border:1px solid "
-      "#bee5eb;vertical-align:middle;font-weight:bold} .reward-link{cursor:pointer;font-size:13px;color:#e67e22;margin-left:15px;text-decoration:none} .reward-link:hover{text-decoration:underline} .modal{display:none;position:fixed;z-index:9999;left:0;top:0;width:100%;height:100%;background:rgba(0,0,0,0.6);backdrop-filter:blur(3.5px)} .modal-content{background:white;margin:10% auto;padding:25px;border-radius:12px;width:340px;text-align:center;box-shadow:0 10px 30px rgba(0,0,0,0.3);position:relative;animation:modalFade 0.3s} @keyframes modalFade{from{opacity:0;transform:translateY(-20px)}to{opacity:1;transform:translateY(0)}} .close-modal{position:absolute;right:15px;top:10px;font-size:24px;cursor:pointer;color:#999} .close-modal:hover{color:#333}</style>";
+  html += "<style>";
+  html += FPSTR(PAGE_CSS);
+  html += "</style>";
   html += "</head><body>";
-  html += "<h1 id='mainTitle'>AnyPort 智能网关控制面板 v" FIRMWARE_VERSION;
+  html += "<h1 id='mainTitle' style='display:flex;align-items:baseline;flex-wrap:wrap'>AnyPort 智能网关控制面板 v" FIRMWARE_VERSION;
   if (g_otaUpdateFound) {
       html += "<span id='otaBadge' class='badge' style='background:#dc3545;color:white;border-color:#bd2130'>有新版本</span>";
   }
   html += "<span class='reward-link' onclick='uiToggleReward(true)'>☕ 赞赏作者</span>";
-  html += "<span style='font-size:14px;color:#666;font-weight:normal;margin-left:15px'>© 2026 Hotwon-CD2-Hsieh</span></h1>";
+  html += "<span style='font-size:12px;color:#bbb;font-weight:normal;margin-left:15px'>© 2026 Hotwon-CD2-Hsieh</span>";
+  html += "<div id='sysStats' style='font-size:12px;color:#777;font-weight:normal;margin-left:auto;display:flex;gap:12px;align-items:center'></div></h1>";
   html += "<form id='mainForm' method='POST' action='/config'>";
 
   // 1. 顶部：WIFI 与 模式切换
@@ -212,6 +242,9 @@ static void handleHttpRoot() {
           "value='" +
           String(g_ntpConfig.interval) + "'><br>";
   html += "</div>";
+  g_httpServer.sendContent(html);
+  html = "";
+  html.reserve(3072);
 
   // 2.5 以太网配置 (W5500) - 在网关、模拟器、协议互转模式下显示，透传与升级模式隐藏
   html += "<div id='secEthConfig' class='card' style='display:" +
@@ -451,6 +484,9 @@ static void handleHttpRoot() {
           String(g_bridgeConfig.stopBits == 2 ? "selected" : "") +
           ">2位</option></select><br>";
   html += "</div>";
+  g_httpServer.sendContent(html);
+  html = "";
+  html.reserve(3072);
 
   // 5. 寄存器配置区
   html += "<div id='secRegisters' class='card' style='display:" +
@@ -525,14 +561,9 @@ static void handleHttpRoot() {
 
   html += "<button type='submit' class='save-btn'>保存并重启设备</button>";
   html += "</form>";
-
-  // 赞赏弹窗 HTML
-  html += "<div id='rewardModal' class='modal' onclick='if(event.target==this)uiToggleReward(false)'>";
-  html += "<div class='modal-content'><span class='close-modal' onclick='uiToggleReward(false)'>&times;</span>";
-  html += "<h2 style='margin-top:0;color:#e67e22'>⚡ 赞赏支持</h2>";
-  html += "<p style='font-size:14px;color:#666;text-align:left;line-height:1.6'>非常感谢您的认可！您的支持是 AnyPort 持续优化的最大动力。</p>";
-  html += "<img src='" + String(OTA_API_BASE) + "/reward.png' style='width:310px;height:auto;border-radius:8px;border:1px solid #eee;'>";
-  html += "<p style='font-size:12px;color:#999;margin-top:15px'>微信扫码赞赏作者</p></div></div>";
+  g_httpServer.sendContent(html);
+  html = "";
+  g_httpServer.sendContent_P(REWARD_MODAL_HTML);
 
   html += "<script>";
   html +=
@@ -611,6 +642,9 @@ static void handleHttpRoot() {
       " `<td><button type='button' "
       "onclick='this.parentElement.parentElement.remove()'>x</button></td>`; ";
   html += "}";
+  g_httpServer.sendContent(html);
+  html = "";
+  html.reserve(2048);
   html += "async function refreshRegValues(){ if(document.activeElement && "
           "document.activeElement.classList.contains('targetVal'))return; try{ "
           "let r=await fetch('/api/registers'); let data=await r.json(); "
@@ -687,6 +721,9 @@ static void handleHttpRoot() {
   html += "  } catch(e) { alert(e.message); this.submitting=false; }";
   html += " }";
   html += "};";  // 关闭 onsubmit 函数
+  g_httpServer.sendContent(html);
+  html = "";
+  html.reserve(1536);
   html += "async function uiCheckOta(){ "
           "let s=document.getElementById('otaInfo'); s.innerText='正在连接云端服务...'; "
           "try{ let r=await fetch('/api/ota/check'); let data=await r.json(); "
@@ -730,9 +767,22 @@ static void handleHttpRoot() {
           "s.innerText='\u6709\u65b0\u7248\u672c';"
           "h.insertBefore(s,h.querySelector('span'));"
           "} }catch(e){} pollOtaBadge(); }, 30000); })();";
+  html += "async function refreshSysStats(){ "
+          "try{ let r=await fetch('/api/sys/status'); let d=await r.json(); "
+          "const fmtUp=(s)=>{ "
+          "if(s<60)return s+'s'; if(s<3600)return Math.floor(s/60)+'m '+(s%60)+'s'; "
+          "return Math.floor(s/3600)+'h '+Math.floor((s%3600)/60)+'m'; }; "
+          "document.getElementById('sysStats').innerHTML="
+          "`<span>CPU: ${d.cpu}MHz</span>` + "
+          "`<span>RAM: ${d.ram}%</span>` + "
+          "`<span>Flash: ${d.flash}%</span>` + "
+          "`<span>WiFi: ${d.rssi}dBm</span>` + "
+          "`<span>Up: ${fmtUp(d.uptime)}</span>`; "
+          "}catch(e){} }";
+  html += "setInterval(refreshSysStats, 5000); refreshSysStats();";
   html += "</script></body></html>";
-
-  g_httpServer.send(200, "text/html; charset=utf-8", html);
+  g_httpServer.sendContent(html);
+  g_httpServer.sendContent("");
 }
 
 static void handleHttpConfig() {
@@ -945,6 +995,23 @@ static void handleOtaRollback() {
   }
 }
 
+static void handleSystemStatus() {
+  StaticJsonDocument<256> doc;
+  doc["cpu"] = ESP.getCpuFreqMHz();
+  doc["ram"] = (int)((1.0f - (float)ESP.getFreeHeap() / ESP.getHeapSize()) * 100.0f);
+  
+  // 修正 Flash 占用计算：直接读取当前运行分区的实际大小
+  uint32_t usedFlash = ESP.getSketchSize();
+  const esp_partition_t* running = esp_ota_get_running_partition();
+  uint32_t totalFlash = (running != NULL) ? running->size : (usedFlash + ESP.getFreeSketchSpace());
+  doc["flash"] = (int)((float)usedFlash / totalFlash * 100.0f);
+  doc["rssi"] = (WiFi.status() == WL_CONNECTED) ? WiFi.RSSI() : 0;
+  doc["uptime"] = millis() / 1000;
+  String out;
+  serializeJson(doc, out);
+  g_httpServer.send(200, "application/json", out);
+}
+
 static void initHttpServer() {
   g_httpServer.on("/", HTTP_GET, handleHttpRoot);
   g_httpServer.on("/config", HTTP_POST, handleHttpConfig);
@@ -952,5 +1019,6 @@ static void initHttpServer() {
   g_httpServer.on("/api/ota/do", HTTP_POST, handleOtaUpdate);
   g_httpServer.on("/api/ota/status", HTTP_GET, handleOtaStatus);
   g_httpServer.on("/api/ota/rollback", HTTP_POST, handleOtaRollback);
+  g_httpServer.on("/api/sys/status", HTTP_GET, handleSystemStatus);
   g_httpServer.begin();
 }
