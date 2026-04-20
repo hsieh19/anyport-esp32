@@ -47,9 +47,9 @@ jobs:
         run: |
           VERSION="${{ steps.get_version.outputs.VERSION }}"
           
-          # 1. 准备 OTA 和全量包目录
-          OTA_DIR="sync/github-release-mirror/anyport/Firmware/OTA Updates/ESP32C3"
-          FULL_DIR="sync/github-release-mirror/anyport/Firmware/Full Firmware Packages/ESP32C3"
+          # 1. 准备 OTA 和全量包目录 (去掉临时目录中的 github-release-mirror 前缀，改由下面的 DEST_DIR 处理)
+          OTA_DIR="sync/anyport/Firmware/OTA Updates/ESP32C3"
+          FULL_DIR="sync/anyport/Firmware/Full Firmware Packages/ESP32C3"
           mkdir -p "$OTA_DIR" "$FULL_DIR"
           
           # 2. 处理 OTA 固件
@@ -93,4 +93,4 @@ jobs:
           AWS_S3_ENDPOINT: https://${{ secrets.R2_ACCOUNT_ID }}.r2.cloudflarestorage.com
           AWS_REGION: auto
           SOURCE_DIR: './sync'
-          DEST_DIR: ''
+          DEST_DIR: 'github-release-mirror'
