@@ -94,4 +94,4 @@ jobs:
           AWS_S3_ENDPOINT: https://${{ secrets.R2_ACCOUNT_ID }}.r2.cloudflarestorage.com
           AWS_REGION: auto
           SOURCE_DIR: "./out"
-          DEST_DIR: "github-release-mirror/anyport"
+          DEST_DIR: "anyport"
