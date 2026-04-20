@@ -337,15 +337,18 @@ static void handleHttpRoot() {
           "name='simMonitorEnabled' " +
           String(g_simConfig.monitorEnabled ? "checked" : "") +
           " style='width:auto'><br>";
-  html += "<label>过滤模式:</label><select name='simMonitorFilter'>";
-  html += "<option value='0' " +
-          String(g_simConfig.monitorFilter == 0 ? "selected" : "") +
-          ">全线报文</option>";
-  html += "<option value='1' " +
-          String(g_simConfig.monitorFilter == 1 ? "selected" : "") +
-          ">仅本站报文</option>";
-  html += "</select>";
-  html += "</div>";
+  html += "<label>地址码过滤:</label><input name='simFilterSlaveId' type='number' value='" + String(g_simConfig.filterSlaveId) + "' style='width:60px'><span style='color:#666;font-size:13px;margin-left:5px'>(0:全线监听)</span><br>";
+  html += "<label>功能码过滤:</label><select name='simFilterFuncCode' style='width:180px'>";
+  struct {uint8_t code; const char* name;} fc[] = {
+      {0, "00 - 不过滤 (All)"}, {1, "01 - 读线圈 (Coils)"}, {2, "02 - 读离散输入 (Inputs)"},
+      {3, "03 - 读保持寄存器 (Holding)"}, {4, "04 - 读输入寄存器 (Input)"},
+      {5, "05 - 写单个线圈 (Coil)"}, {6, "06 - 写单个寄存器 (Reg)"},
+      {15, "0F - 写多个线圈 (Coils)"}, {16, "10 - 写多个寄存器 (Regs)"}
+  };
+  for(int i=0; i<9; i++) {
+      html += "<option value='" + String(fc[i].code) + "'" + (g_simConfig.filterFuncCode == fc[i].code ? " selected" : "") + ">" + fc[i].name + "</option>";
+  }
+  html += "</select><span style='color:#666;font-size:13px;margin-left:5px'>(0:不过滤)</span></div>";
 
   // 4. 模式 C: USB 透传配置
   html += "<div id='secTransparent' class='card' style='display:" +
@@ -667,6 +670,7 @@ static void handleHttpRoot() {
           "c=document.getElementById('monitorLog'); "
           "if(logs.length>0){ let h=''; logs.forEach(l=>{ let "
           "color=l.dir=='TX'?'#ce9178':'#9cdcfe'; "
+          "let metaTxt=(l.meta==1?'<span style=\"color:#4ec9b0\">[Req]</span>':(l.meta==2?'<span style=\"color:#ce9178\">[Resp]</span>':'')); "
           "let ms=l.t%1000; let s=Math.floor(l.t/1000)%60; let "
           "m=Math.floor(l.t/60000); "
           "let "
@@ -674,7 +678,7 @@ static void handleHttpRoot() {
           "padStart(3,'0')}`; "
           "h+=`<div><span style='color:#808080'>[${ts}]</span> <span "
           "style='color:${color};font-weight:bold'>${l.dir}</span> <span "
-          "style='color:#4ec9b0'>[${l.type}]</span> ${l.hex}</div>`; }); "
+          "style='color:#4ec9b0'>[${l.type}]</span>${metaTxt} ${l.hex}</div>`; }); "
           "c.innerHTML=h; c.scrollTop=c.scrollHeight; } else "
           "if(logs.length==0) { c.innerHTML='等待数据...'; } }catch(e){} }";
   html += "setInterval(refreshRegValues, 1000);";
@@ -709,8 +713,9 @@ static void handleHttpRoot() {
           "value=='1',tcpPort:parseInt(document.getElementsByName('simTcpPort')"
           "[0].value),netInterface:parseInt(document.getElementsByName('simNetInt')"
           "[0].value),monitorEnabled:document.getElementsByName('"
-          "simMonitorEnabled')[0].checked,monitorFilter:parseInt(document."
-          "getElementsByName('simMonitorFilter')[0].value)};";
+          "simMonitorEnabled')[0].checked,filterSlaveId:parseInt(document."
+          "getElementsByName('simFilterSlaveId')[0].value),filterFuncCode:parseInt(document."
+          "getElementsByName('simFilterFuncCode')[0].value)};";
   html += "    let r2 = await "
           "fetch('/api/simConfig',{method:'POST',body:JSON.stringify(cfg)});";
   html += "    if(!r2.ok) throw new Error('保存模拟器配置失败');";

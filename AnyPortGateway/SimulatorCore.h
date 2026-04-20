@@ -75,41 +75,87 @@ struct SimulatorGlobalConfig {
     uint16_t tcpPort;
     uint8_t netInterface; // 0: Auto, 1: W5500, 2: WiFi
     bool monitorEnabled; // 是否开启报文监听
-    uint8_t monitorFilter; // 0:全线报文, 1:仅本站报文
+    uint8_t filterSlaveId;  // 过滤特定的从站 ID (0 表示不过滤/全线监听)
+    uint8_t filterFuncCode; // 过滤特定的功能码 (0 表示不过滤)
 };
 
 // 共享寄存器池
 static const size_t MAX_SIM_VARIABLES = 32;
 static SimulatorVariable g_simVariables[MAX_SIM_VARIABLES];
 static size_t g_simVarCount = 0;
-static SimulatorGlobalConfig g_simConfig = {true, 9600, 1, 0, 8, 1, 1, true, 502, 0, false, 0};
+static SimulatorGlobalConfig g_simConfig = {true, 9600, 1, 0, 8, 1, 1, true, 502, 0, false, 0, 0};
 
 // 报文监听循环缓冲区
 struct MonitorLog {
     unsigned long timestamp;
     bool isOutgoing; // TX: true, RX: false
     uint8_t type;    // 0: RTU, 1: TCP
+    uint8_t meta;    // 新增：0:Unknown, 1:Req, 2:Resp
     uint8_t data[260];
     size_t length;
 };
-static const size_t MAX_MONITOR_LOGS = 20;
+static const size_t MAX_MONITOR_LOGS = 100; // 已从 20 扩展为 100
 static MonitorLog g_monitorLogs[MAX_MONITOR_LOGS];
 static size_t g_monitorHead = 0;
 static size_t g_monitorCount = 0;
 
 static void addMonitorLog(bool isOutgoing, uint8_t type, const uint8_t* data, size_t len) {
-    if (!g_simConfig.monitorEnabled) return;
+    if (!g_simConfig.monitorEnabled || len == 0) return;
     
-    // 过滤逻辑：本站报文过滤（针对本站地址或响应）
-    if (g_simConfig.monitorFilter == 1 && len > 0) {
-        uint8_t expectedId = (type == 0) ? g_simConfig.unitId : g_simConfig.tcpUnitId;
-        if (data[0] != expectedId) return;
+    uint8_t msgUnitId = 0;
+    uint8_t msgFuncCode = 0;
+
+    if (type == 0) { // RTU
+        msgUnitId = data[0];
+        if (len > 1) msgFuncCode = data[1];
+    } else { // TCP (MBAP + PDU)
+        if (len >= 8) {
+            msgUnitId = data[6];
+            msgFuncCode = data[7];
+        } else if (len >= 7) {
+            msgUnitId = data[6];
+        }
+    }
+
+    // 1. 高级过滤逻辑：特定从站地址
+    if (g_simConfig.filterSlaveId != 0 && msgUnitId != g_simConfig.filterSlaveId) {
+        return;
+    }
+
+    // 2. 高级过滤逻辑：特定功能码 (匹配时屏蔽异常码标志位 0x80)
+    if (g_simConfig.filterFuncCode != 0) {
+        uint8_t baseFuncCode = msgFuncCode & 0x7F;
+        if (baseFuncCode != g_simConfig.filterFuncCode) return;
+    }
+
+    // --- 智能身份识别算法 ---
+    uint8_t frameMeta = 0; 
+    if (type == 1) { // TCP 模式：身份绝对固定
+        frameMeta = isOutgoing ? 2 : 1; 
+    } else { // RTU 模式：根据特征判别
+        if (isOutgoing) {
+            frameMeta = 2; // 自己发出的必为响应
+        } else {
+            if (msgFuncCode > 0x80) {
+                frameMeta = 2; // 异常响应
+            } else if (msgFuncCode >= 1 && msgFuncCode <= 4) {
+                // 读指令：请求固定8字节，响应必不为8
+                frameMeta = (len == 8) ? 1 : 2;
+            } else if (msgFuncCode == 15 || msgFuncCode == 16) {
+                // 写多个：请求必大于8，响应固定为8
+                frameMeta = (len > 8) ? 1 : 2;
+            } else if (msgFuncCode == 5 || msgFuncCode == 6) {
+                // 写单个：请求和响应长度相同(8字节)，在此模式下默认为主站请求
+                frameMeta = 1;
+            }
+        }
     }
 
     size_t index = (g_monitorHead + g_monitorCount) % MAX_MONITOR_LOGS;
     g_monitorLogs[index].timestamp = millis();
     g_monitorLogs[index].isOutgoing = isOutgoing;
     g_monitorLogs[index].type = type;
+    g_monitorLogs[index].meta = frameMeta;
     g_monitorLogs[index].length = (len > 260) ? 260 : len;
     memcpy(g_monitorLogs[index].data, data, g_monitorLogs[index].length);
 

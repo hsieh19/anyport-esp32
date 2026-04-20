@@ -104,7 +104,8 @@ static void handleGetSimConfig(WebServer& server) {
     doc["tcpPort"] = g_simConfig.tcpPort;
     doc["netInterface"] = g_simConfig.netInterface;
     doc["monitorEnabled"] = g_simConfig.monitorEnabled;
-    doc["monitorFilter"] = g_simConfig.monitorFilter;
+    doc["filterSlaveId"] = g_simConfig.filterSlaveId;
+    doc["filterFuncCode"] = g_simConfig.filterFuncCode;
 
     String out;
     serializeJson(doc, out);
@@ -132,7 +133,8 @@ static void handleUpdateSimConfig(WebServer& server) {
     g_simConfig.tcpPort = doc["tcpPort"] | 502;
     g_simConfig.netInterface = doc["netInterface"] | 0;
     g_simConfig.monitorEnabled = doc["monitorEnabled"] | false;
-    g_simConfig.monitorFilter = doc["monitorFilter"] | 0;
+    g_simConfig.filterSlaveId = doc["filterSlaveId"] | 0;
+    g_simConfig.filterFuncCode = doc["filterFuncCode"] | 0;
     
     saveSimConfig();
     server.sendHeader("Cache-Control", "no-cache");
@@ -143,7 +145,8 @@ static void handleUpdateSimConfig(WebServer& server) {
  * @brief 获取报文监听数据的 API
  */
 static void handleGetMonitorLogs(WebServer& server) {
-    DynamicJsonDocument doc(8192);
+    // 100条报文，每条约300字节JSON，给予充足空间确保序列化成功
+    DynamicJsonDocument doc(49152); 
     JsonArray arr = doc.to<JsonArray>();
 
     for (size_t i = 0; i < g_monitorCount; i++) {
@@ -152,6 +155,7 @@ static void handleGetMonitorLogs(WebServer& server) {
         obj["t"] = g_monitorLogs[idx].timestamp;
         obj["dir"] = g_monitorLogs[idx].isOutgoing ? "TX" : "RX";
         obj["type"] = g_monitorLogs[idx].type == 0 ? "RTU" : "TCP";
+        obj["meta"] = g_monitorLogs[idx].meta; // 0:Unk, 1:Req, 2:Resp
         
         static const char* hexChars = "0123456789ABCDEF";
         String hex = "";
