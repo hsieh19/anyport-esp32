@@ -45,21 +45,42 @@ jobs:
 
       - name: Prepare R2 Structure
         run: |
-          # 1. 创建符合 Worker 预想的目录结构
-          mkdir -p sync/anyport/Firmware
-          
-          # 2. 复制固件并重命名
-          cp ./build/AnyPortGateway.ino.bin ./sync/anyport/Firmware/AnyPortGateway_v${{ steps.get_version.outputs.VERSION }}.bin
-          
-          # 3. 从 CHANGELOG.md 中提取对应版本的更新日志 (保留换行)
           VERSION="${{ steps.get_version.outputs.VERSION }}"
+          
+          # 1. 准备 OTA 和全量包目录
+          OTA_DIR="sync/github-release-mirror/anyport/Firmware/OTA Updates/ESP32C3"
+          FULL_DIR="sync/github-release-mirror/anyport/Firmware/Full Firmware Packages/ESP32C3"
+          mkdir -p "$OTA_DIR" "$FULL_DIR"
+          
+          # 2. 处理 OTA 固件
+          cp ./build/AnyPortGateway.ino.bin "$OTA_DIR/anyport_Firmware_AnyPortGateway_v${VERSION}.bin"
+          
+          # 3. 生成版本信息 (anyport_version.json)
           awk "/## \[$VERSION\]/{flag=1;next}/## \[/{flag=0}flag" CHANGELOG.md > temp_changelog.txt
-          
-          # 使用 Python 进行标准的 JSON 转义（处理引号、换行等）
           ESCAPED_LOG=$(python3 -c 'import json, sys; print(json.dumps(sys.stdin.read().strip()))' < temp_changelog.txt)
+          echo "{ \"version\": \"$VERSION\", \"changelog\": $ESCAPED_LOG }" > "$OTA_DIR/anyport_version.json"
+
+          # 4. 合并全量固件包 (用于 WebSerial 刷机，严格对齐 Arduino IDE 参数)
+          pip install esptool
+          FULL_BIN_NAME="anyport_Full_v${VERSION}.bin"
+          esptool.py --chip esp32c3 merge_bin \
+            -o "$FULL_DIR/$FULL_BIN_NAME" \
+            --flash_mode dio \
+            --flash_size 4MB \
+            --flash_freq 40m \
+            0x0 ./build/AnyPortGateway.ino.bootloader.bin \
+            0x8000 ./build/AnyPortGateway.ino.partitions.bin \
+            0x10000 ./build/AnyPortGateway.ino.bin
           
-          # 4. 生成 version.json
-          echo "{ \"version\": \"$VERSION\", \"changelog\": $ESCAPED_LOG }" > ./sync/anyport/version.json
+          # 5. 生成刷机工具清单 (manifest.json)
+          MD5_HASH=$(md5sum "$FULL_DIR/$FULL_BIN_NAME" | cut -d ' ' -f 1)
+          RELEASE_TIME=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+          echo "{
+            \"version\": \"$VERSION\",
+            \"filename\": \"$FULL_BIN_NAME\",
+            \"md5\": \"$MD5_HASH\",
+            \"release_time\": \"$RELEASE_TIME\"
+          }" > "$FULL_DIR/manifest.json"
 
       - name: Upload to Cloudflare R2
         uses: jakejarvis/s3-sync-action@master
@@ -73,44 +94,3 @@ jobs:
           AWS_REGION: auto
           SOURCE_DIR: './sync'
           DEST_DIR: ''
-
-      - name: Apply Firmware Retention Policy (keep 10)
-        continue-on-error: true
-        run: |
-          pip install 'boto3>=1.28,<1.34' 'botocore>=1.31,<1.34'
-          python3 << 'EOF'
-          import boto3, os
-          from botocore.config import Config
-
-          endpoint = "https://" + os.environ["R2_ACCOUNT_ID"] + ".r2.cloudflarestorage.com"
-          bucket   = os.environ["R2_BUCKET"]
-
-          s3 = boto3.client("s3",
-              endpoint_url=endpoint,
-              aws_access_key_id=os.environ["R2_ACCESS_KEY_ID"],
-              aws_secret_access_key=os.environ["R2_SECRET_ACCESS_KEY"],
-              region_name="us-east-1",
-              config=Config(signature_version="s3v4")
-          )
-
-          prefix = "anyport/Firmware/"
-          resp = s3.list_objects_v2(Bucket=bucket, Prefix=prefix)
-          files = [obj for obj in resp.get("Contents", []) if obj["Key"].endswith(".bin")]
-          files.sort(key=lambda x: x["LastModified"])
-
-          print(f"[INFO] Current firmware count: {len(files)}")
-
-          if len(files) > 10:
-              to_delete = files[:len(files) - 10]
-              for f in to_delete:
-                  print(f"[WARN] Deleting expired: {f['Key']}")
-                  s3.delete_object(Bucket=bucket, Key=f["Key"])
-              print(f"[INFO] Cleaned {len(to_delete)} old firmware(s).")
-          else:
-              print("[INFO] Within retention limit. No cleanup needed.")
-          EOF
-        env:
-          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
-          R2_BUCKET: ${{ secrets.R2_BUCKET }}
-          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
-          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
