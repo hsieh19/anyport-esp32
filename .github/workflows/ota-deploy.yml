@@ -46,10 +46,11 @@ jobs:
       - name: Prepare R2 Structure
         run: |
           VERSION="${{ steps.get_version.outputs.VERSION }}"
+          rm -rf out
           
-          # 1. 准备 OTA 和全量包目录 (去掉临时目录中的 github-release-mirror 前缀，改由下面的 DEST_DIR 处理)
-          OTA_DIR="sync/anyport/Firmware/OTA Updates/ESP32C3"
-          FULL_DIR="sync/anyport/Firmware/Full Firmware Packages/ESP32C3"
+          # 1. 准备本地输出目录结构 (对应 anyport 目录下的结构)
+          OTA_DIR="out/Firmware/OTA Updates/ESP32C3"
+          FULL_DIR="out/Firmware/Full Firmware Packages/ESP32C3"
           mkdir -p "$OTA_DIR" "$FULL_DIR"
           
           # 2. 处理 OTA 固件
@@ -60,7 +61,7 @@ jobs:
           ESCAPED_LOG=$(python3 -c 'import json, sys; print(json.dumps(sys.stdin.read().strip()))' < temp_changelog.txt)
           echo "{ \"version\": \"$VERSION\", \"changelog\": $ESCAPED_LOG }" > "$OTA_DIR/anyport_version.json"
 
-          # 4. 合并全量固件包 (用于 WebSerial 刷机，严格对齐 Arduino IDE 参数)
+          # 4. 合并全量固件包 (用于 WebSerial 刷机)
           pip install esptool
           FULL_BIN_NAME="anyport_Full_v${VERSION}.bin"
           esptool.py --chip esp32c3 merge_bin \
@@ -92,5 +93,5 @@ jobs:
           AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
           AWS_S3_ENDPOINT: https://${{ secrets.R2_ACCOUNT_ID }}.r2.cloudflarestorage.com
           AWS_REGION: auto
-          SOURCE_DIR: './sync'
-          DEST_DIR: 'github-release-mirror'
+          SOURCE_DIR: "./out"
+          DEST_DIR: "github-release-mirror/anyport"
