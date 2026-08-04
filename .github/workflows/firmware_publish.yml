@@ -104,7 +104,7 @@ jobs:
             --flash_freq "${FLASH_FREQ}" \
             0x0     ./build/*.bootloader.bin \
             0x8000  ./build/*.partitions.bin \
-            0x10000 ./build/*.bin
+            0x10000 $(ls ./build/*.bin | grep -v "bootloader" | grep -v "partitions")
 
           # 3. 生成 Full Firmware manifest.json (AnyFlash 烧录网页读取版本信息)
           FULL_MD5=$(md5sum "${FULL_DIR}/${FULL_BIN_NAME}" | cut -d ' ' -f 1)
