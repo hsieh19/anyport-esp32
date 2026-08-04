@@ -13,6 +13,8 @@ jobs:
   build-and-deploy:
     name: 编译固件并发布到 Cloudflare R2
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
 
     env:
       # 项目标识符 (必须与 R2 存储桶中的顶层目录名一致)
