@@ -2,6 +2,19 @@
 
 所有对 AnyPort ESP32 网关固件的重大更改都将记录在此文件中。
 
+## [1.5.6] - 2026-08-04
+
+### 新增与优化 (通用固件分发与在线 OTA 管理适配)
+
+- **对接通用固件分发与在线 OTA 管理平台 (AnyFlash)**：
+  - **自动 CI/CD 与 R2 发布链重构**：套用 AnyFlash 通用固件发布工作流模板（核心锁死在 ESP32 核心 2.0.14），弃用了原先过时的 `ota-deploy.yml` 工作流并部署了 `firmware_publish.yml`。在 GitHub 推送版本 Tag 时，GHA 将自动生成合规的项目描述 `project.json` 与 Full/OTA 固件的 `manifest.json` 清单并流式发布至 Cloudflare R2。
+  - **本地发布脚本部署**：引入了 `deploy_r2.py` 本地发布脚本，默认配置与 anyport 属性、ESP32C3 芯片、项目描述完全对齐，支持本地通过 CLI 直接上传。
+  - **OTA 升级地址可配置化 (全漏洞封锁与隐私保护)**：
+    - 废弃了在固件中写死 CF Worker 域名和 `/get-link` 路由的方案，全面保护隐私并增强了可用性。
+    - **NVS 动态存储与加载**：在设备的 NVS 空间新增 `"otaApi"` 配置键，默认初始化为非隐私的占位地址 `"https://your-firmware-worker.workers.dev"`。
+    - **Web 控制台交互**：在 Web 页面“系统固件在线更新 (OTA)”卡片下新增“CF Worker OTA 升级地址”的输入框，支持用户直接在网页端手动修改并一键保存重启。
+    - **新版 OTA 签名检测流程**：自检和重新校验逻辑全面转向读取该配置，并对接通用 Worker `/api/ota/check?project=anyport&chip=ESP32C3` 的单轮自检逻辑。
+
 ## [1.5.5] - 2026-04-20
 
 ### 新增与增强 (从站模拟器深度监听)

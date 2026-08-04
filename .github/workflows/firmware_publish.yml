@@ -1,0 +1,171 @@
+# ============================================================
+# AnyFlash 通用固件发布工作流 (Arduino CLI 版)
+# ============================================================
+
+name: Build & Publish Firmware to R2
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build-and-deploy:
+    name: 编译固件并发布到 Cloudflare R2
+    runs-on: ubuntu-latest
+
+    env:
+      # 项目标识符 (必须与 R2 存储桶中的顶层目录名一致)
+      PROJECT_ID: "anyport"
+      # 项目展示名称
+      PROJECT_NAME: "Anyport 串口服务器"
+      # 项目功能描述
+      PROJECT_DESC: "多功能工业协议转换网关，提供 Modbus、BACnet 等协议转发及边缘计算支持"
+      # 目标芯片平台目录名 (需与 R2 路径一致)
+      CHIP_PLATFORM: "ESP32C3"
+      # Arduino CLI 编译 FQBN
+      FQBN: "esp32:esp32:esp32c3:CDCOnBoot=cdc,FlashMode=dio,FlashSize=4M,PartitionScheme=min_spiffs"
+      # Arduino .ino 主文件路径
+      SKETCH_PATH: "./AnyPortGateway/AnyPortGateway.ino"
+      # esptool merge_bin 参数
+      FLASH_CHIP: "esp32c3"
+      FLASH_MODE: "dio"
+      FLASH_SIZE: "4MB"
+      FLASH_FREQ: "40m"
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Extract Version from Tag
+        id: get_version
+        run: echo "VERSION=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
+
+      - name: Setup Arduino CLI
+        uses: arduino/setup-arduino-cli@v1
+
+      - name: Install ESP32 Platform (locked to 2.0.14)
+        run: |
+          arduino-cli core update-index
+          arduino-cli core update-index --additional-urls https://raw.githubusercontent.com/espressif/arduino-esp32/gh-pages/package_esp32_index.json
+          arduino-cli core install esp32:esp32@2.0.14 --additional-urls https://raw.githubusercontent.com/espressif/arduino-esp32/gh-pages/package_esp32_index.json
+
+      - name: Install Libraries
+        run: |
+          arduino-cli lib install "ArduinoJson"
+          arduino-cli lib install "MQTT"
+          arduino-cli lib install "Ethernet"
+          arduino-cli lib install "ModbusMaster"
+          arduino-cli lib install "NTPClient"
+
+      - name: Compile Firmware
+        run: |
+          arduino-cli compile \
+            --fqbn "$FQBN" \
+            --output-dir ./build \
+            "$SKETCH_PATH"
+        env:
+          FQBN: ${{ env.FQBN }}
+          SKETCH_PATH: ${{ env.SKETCH_PATH }}
+
+      - name: Prepare R2 Directory Structure
+        env:
+          VERSION: ${{ steps.get_version.outputs.VERSION }}
+          PROJECT_ID: ${{ env.PROJECT_ID }}
+          PROJECT_NAME: ${{ env.PROJECT_NAME }}
+          PROJECT_DESC: ${{ env.PROJECT_DESC }}
+          CHIP_PLATFORM: ${{ env.CHIP_PLATFORM }}
+          FLASH_CHIP: ${{ env.FLASH_CHIP }}
+          FLASH_MODE: ${{ env.FLASH_MODE }}
+          FLASH_SIZE: ${{ env.FLASH_SIZE }}
+          FLASH_FREQ: ${{ env.FLASH_FREQ }}
+        run: |
+          rm -rf out
+          OTA_DIR="out/Firmware/OTA Updates/${CHIP_PLATFORM}"
+          FULL_DIR="out/Firmware/Full Firmware Packages/${CHIP_PLATFORM}"
+          mkdir -p "$OTA_DIR" "$FULL_DIR"
+
+          # 1. 生成 project.json (供 AnyFlash Worker /api/projects 发现此项目)
+          python3 -c "
+          import json
+          data = {'id': '${PROJECT_ID}', 'name': '${PROJECT_NAME}', 'description': '${PROJECT_DESC}'}
+          print(json.dumps(data, indent=2, ensure_ascii=False))
+          " > out/project.json
+
+          # 2. 合并全量固件包 (供 AnyFlash 网页端烧录, 偏移地址 0x0)
+          pip install esptool --quiet
+          FULL_BIN_NAME="${PROJECT_ID}_Full_v${VERSION}.bin"
+          esptool.py --chip "${FLASH_CHIP}" merge_bin \
+            -o "${FULL_DIR}/${FULL_BIN_NAME}" \
+            --flash_mode "${FLASH_MODE}" \
+            --flash_size "${FLASH_SIZE}" \
+            --flash_freq "${FLASH_FREQ}" \
+            0x0     ./build/*.bootloader.bin \
+            0x8000  ./build/*.partitions.bin \
+            0x10000 ./build/*.bin
+
+          # 3. 生成 Full Firmware manifest.json (AnyFlash 烧录网页读取版本信息)
+          FULL_MD5=$(md5sum "${FULL_DIR}/${FULL_BIN_NAME}" | cut -d ' ' -f 1)
+          RELEASE_TIME=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+          python3 -c "
+          import json
+          data = {
+            'version': '${VERSION}',
+            'filename': '${FULL_BIN_NAME}',
+            'md5': '${FULL_MD5}',
+            'release_time': '${RELEASE_TIME}'
+          }
+          print(json.dumps(data, indent=2))
+          " > "${FULL_DIR}/manifest.json"
+          echo "-> Full manifest: ${FULL_DIR}/manifest.json"
+
+          # 4. 复制 OTA 固件包 (排除 bootloader 和 partitions 的应用 bin)
+          OTA_BIN_NAME="${PROJECT_ID}_OTA_v${VERSION}.bin"
+          cp $(ls ./build/*.bin | grep -v "bootloader" | grep -v "partitions") "${OTA_DIR}/${OTA_BIN_NAME}"
+
+          # 5. 提取 CHANGELOG 并生成 OTA manifest.json (Worker /api/ota/check 读取)
+          RELEASE_TIME=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+          OTA_MD5=$(md5sum "${OTA_DIR}/${OTA_BIN_NAME}" | cut -d ' ' -f 1)
+          if [ -f "CHANGELOG.md" ]; then
+            awk "/## \[${VERSION}\]/{flag=1;next}/## \[/{flag=0}flag" CHANGELOG.md > temp_changelog.txt
+            CHANGELOG_JSON=$(python3 -c 'import json,sys; print(json.dumps(sys.stdin.read().strip()))' < temp_changelog.txt)
+          else
+            CHANGELOG_JSON='""'
+          fi
+          python3 -c "
+          import json, sys
+          changelog = ${CHANGELOG_JSON}
+          data = {
+            'version': '${VERSION}',
+            'filename': '${OTA_BIN_NAME}',
+            'md5': '${OTA_MD5}',
+            'release_time': '${RELEASE_TIME}',
+            'changelog': changelog
+          }
+          print(json.dumps(data, indent=2))
+          " > "${OTA_DIR}/manifest.json"
+          echo "-> OTA manifest: ${OTA_DIR}/manifest.json"
+
+      - name: Upload to Cloudflare R2
+        uses: jakejarvis/s3-sync-action@master
+        with:
+          args: --follow-symlinks
+        env:
+          AWS_S3_BUCKET: ${{ secrets.R2_BUCKET }}
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          AWS_S3_ENDPOINT: https://${{ secrets.R2_ACCOUNT_ID }}.r2.cloudflarestorage.com
+          AWS_REGION: auto
+          SOURCE_DIR: "./out"
+          DEST_DIR: ${{ env.PROJECT_ID }}
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          fail_on_unmatched_files: false
+          files: |
+            out/Firmware/Full Firmware Packages/${{ env.CHIP_PLATFORM }}/*.bin
+            out/Firmware/OTA Updates/${{ env.CHIP_PLATFORM }}/*.bin

@@ -44,7 +44,7 @@ static constexpr const char *MQTT_SITE_ID = "office";
 static constexpr const char *MQTT_GATEWAY_ID = "gateway-01";
 static const size_t MQTT_JSON_DOC_SIZE = 1024;
 
-#define FIRMWARE_VERSION "1.5.5"
+#define FIRMWARE_VERSION "1.5.6"
 
 static const uint32_t RS485_DEFAULT_BAUDRATE = 9600;
 static const uint8_t RS485_DEFAULT_DATABITS = 8;
@@ -155,6 +155,7 @@ extern unsigned long g_lastHeartbeatMs;
 extern BridgeConfig g_bridgeConfig;
 extern EthWifiConfig g_ethWifiConfig;
 extern NetInterface g_netInterface;
+extern String g_otaApiBase;
 
 // -----------------------
 // 5. 调试宏

@@ -62,9 +62,6 @@ inline bool executeRollback() {
     return true;
 }
 
-// 你的 Cloudflare Worker API 地址
-#define OTA_API_BASE "https://update.anyport.one/anyport"
-
 static String g_otaRemoteVersion = "";
 static String g_otaChangelog = "";
 static String g_otaValidatedUrl = ""; // 经过预检的有效下载地址
@@ -72,7 +69,7 @@ static bool g_otaUpdateFound = false;
 static unsigned long g_lastOtaCheck = 0;
 
 /**
- * @brief 内部函数：获取并校验下载链接
+ * @brief 内部函数：获取并校验下载链接 (刷新带签名 URL)
  * @return true: 链接有效, false: 文件不存在或获取失败
  */
 inline bool validateFirmwareExistence() {
@@ -81,10 +78,10 @@ inline bool validateFirmwareExistence() {
     WiFiClientSecure client;
     client.setInsecure();
     HTTPClient http;
-    String getLinkUrl = String(OTA_API_BASE) + "/get-link?ver=" + g_otaRemoteVersion;
+    String checkUrl = g_otaApiBase + "/api/ota/check?project=anyport&chip=ESP32C3";
     
-    APP_LOG("[OTA] Validating existence: %s", getLinkUrl.c_str());
-    http.begin(client, getLinkUrl);
+    APP_LOG("[OTA] Refreshing URL: %s", checkUrl.c_str());
+    http.begin(client, checkUrl);
     http.setUserAgent("Mozilla/5.0 AnyPort-Validator");
     int httpCode = http.GET();
     
@@ -110,7 +107,7 @@ inline int checkOtaUpdate() {
     WiFiClientSecure client;
     client.setInsecure();
     HTTPClient http;
-    String checkUrl = String(OTA_API_BASE) + "/check";
+    String checkUrl = g_otaApiBase + "/api/ota/check?project=anyport&chip=ESP32C3";
 
     if (!http.begin(client, checkUrl)) return -1;
     http.setUserAgent("Mozilla/5.0 AnyPort-Collector/" FIRMWARE_VERSION);
@@ -121,6 +118,7 @@ inline int checkOtaUpdate() {
         deserializeJson(doc, http.getString());
         g_otaRemoteVersion = doc["version"] | "";
         g_otaChangelog = doc["changelog"] | "";
+        g_otaValidatedUrl = doc["url"] | "";
         if (g_otaRemoteVersion != "" && g_otaRemoteVersion != FIRMWARE_VERSION) {
             g_otaUpdateFound = true;
             return 1;

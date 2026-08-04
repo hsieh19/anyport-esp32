@@ -32,6 +32,7 @@ uint8_t g_transStopBits = 1;
 BridgeConfig g_bridgeConfig = {0, 0, 1, 0, 502, "", 502, 9600, 1, 0, 8};
 EthWifiConfig g_ethWifiConfig = {502, "192.168.1.100", 502, 0};
 NetInterface g_netInterface = NetInterface::AUTO;
+String g_otaApiBase = "https://your-firmware-worker.workers.dev";
 
 WebServer g_httpServer(80);
 uint8_t g_rtuRxBuffer[512] __attribute__((aligned(4)));
@@ -61,6 +62,7 @@ unsigned long g_lastHeartbeatMs = 0;
 static void loadPersistentConfig() {
     g_prefs.begin("anyport", true);
     g_workMode = static_cast<WorkMode>(g_prefs.getUChar("workMode", 0));
+    g_otaApiBase = g_prefs.getString("otaApi", "https://your-firmware-worker.workers.dev");
     
     if (g_prefs.isKey("ethIp") && g_prefs.isKey("ethMask")) {
         uint32_t ipRaw = g_prefs.getUInt("ethIp", 0);

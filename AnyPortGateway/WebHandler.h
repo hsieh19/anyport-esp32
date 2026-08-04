@@ -524,6 +524,7 @@ static void handleHttpRoot() {
   html += "<div id='secOta' class='card' style='display:" +
           String(g_workMode == WorkMode::FIRMWARE_UPDATE ? "block" : "none") + "'>";
   html += "<h2>系统固件在线更新 (OTA)</h2>";
+  html += "      <label>CF Worker OTA 升级地址:</label><input name='otaApi' value='" + g_otaApiBase + "' style='width:90%'><br><br>";
     if (g_otaUpdateFound) {
       html += "      <div style='margin-bottom:10px'><b style='color:#28a745;font-size:16px'>发现新版本: v" + g_otaRemoteVersion + "</b></div>";
       html += "      <div style='font-size:13px;color:#444;background:#f8f9fa;padding:12px;border-radius:6px;border-left:4px solid #17a2b8;white-space:pre-wrap;line-height:1.5;text-align:left'>";
@@ -818,6 +819,13 @@ static void handleHttpConfig() {
   String workModeStr = g_httpServer.arg("workMode");
   if (workModeStr.length() > 0) {
     g_prefs.putUChar("workMode", (uint8_t)workModeStr.toInt());
+  }
+
+  // OTA 地址保存
+  String otaApi = g_httpServer.arg("otaApi");
+  if (otaApi.length() > 0) {
+    g_prefs.putString("otaApi", otaApi);
+    g_otaApiBase = otaApi;
   }
 
   // WiFi 保存
