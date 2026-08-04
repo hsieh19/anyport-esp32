@@ -129,13 +129,15 @@ static const char PAGE_CSS[] PROGMEM =
     ".close-modal{position:absolute;right:15px;top:10px;font-size:24px;cursor:"
     "pointer;color:#999} .close-modal:hover{color:#333}";
 
-static const char REWARD_MODAL_HTML[] PROGMEM =
+static const char REWARD_MODAL_HTML_PART1[] PROGMEM =
     "<div id='rewardModal' class='modal' onclick='if(event.target==this)"
     "uiToggleReward(false)'><div class='modal-content'><span class='close-modal' "
     "onclick='uiToggleReward(false)'>&times;</span><h2 "
     "style='margin-top:0;color:#e67e22'>⚡ 赞赏支持</h2><p "
     "style='font-size:14px;color:#666;text-align:center;line-height:1.6;white-space:nowrap'>"
-    "您的支持是 AnyPort 持续优化的最大动力。</p><img src='" OTA_API_BASE
+    "您的支持是 AnyPort 持续优化的最大动力。</p><img src='';
+
+static const char REWARD_MODAL_HTML_PART2[] PROGMEM =
     "/reward.png' "
     "style='width:310px;height:auto;border-radius:8px;border:1px solid #eee;'><p "
     "style='font-size:12px;color:#999;margin-top:15px'>微信扫码赞赏作者</p></div>"
@@ -570,7 +572,9 @@ static void handleHttpRoot() {
   html += "</form>";
   g_httpServer.sendContent(html);
   html = "";
-  g_httpServer.sendContent_P(REWARD_MODAL_HTML);
+  g_httpServer.sendContent_P(REWARD_MODAL_HTML_PART1);
+  g_httpServer.sendContent(g_otaApiBase);
+  g_httpServer.sendContent_P(REWARD_MODAL_HTML_PART2);
 
   html += "<script>";
   html +=
