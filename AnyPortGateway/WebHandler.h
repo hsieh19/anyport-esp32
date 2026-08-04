@@ -529,18 +529,28 @@ static void handleHttpRoot() {
   html += "<div id='secOta' class='card' style='display:" +
           String(g_workMode == WorkMode::FIRMWARE_UPDATE ? "block" : "none") + "'>";
   html += "<h2>系统固件在线更新 (OTA)</h2>";
-  html += "      <label>CF Worker OTA 升级地址:</label><input name='otaApi' value='" + g_otaApiBase + "' style='width:90%'><br><br>";
+  html += "      <div style='margin-bottom: 20px;'><label style='display:block;font-weight:bold;margin-bottom:8px'>OTA升级地址:</label><input name='otaApi' value='" + g_otaApiBase + "' style='width:100%;max-width:550px;box-sizing:border-box;padding:8px;border:1px solid #ccc;border-radius:4px'></div>";
+  html += "      <div id='otaInfo'>";
     if (g_otaUpdateFound) {
-      html += "      <div style='margin-bottom:10px'><b style='color:#28a745;font-size:16px'>发现新版本: v" + g_otaRemoteVersion + "</b></div>";
-      html += "      <div style='font-size:13px;color:#444;background:#f8f9fa;padding:12px;border-radius:6px;border-left:4px solid #17a2b8;white-space:pre-wrap;line-height:1.5;text-align:left'>";
-      html += g_otaChangelog;
-      html += "      </div>";
-      html += "      <button type='button' id='btnDoUpdate' onclick='uiDoUpdate()' style='margin-top:15px;background:#dc3545'>立即升级</button>";
+      html += "        <div style='background:#d4edda;border-left:4px solid #28a745;padding:15px;border-radius:6px;margin-bottom:15px;color:#155724;font-size:14px'>";
+      html += "          <b style='color:#28a745;font-size:16px;display:block;margin-bottom:8px'>🎉 发现新版本: v" + g_otaRemoteVersion + "</b>";
+      html += "          <div style='font-size:13px;color:#444;background:#fff;padding:12px;border-radius:4px;border:1px solid #c3e6cb;white-space:pre-wrap;line-height:1.5;text-align:left'>" + g_otaChangelog + "</div>";
+      html += "        </div>";
     } else {
-      html += "      <div id='otaInfo' style='font-size:14px;color:#666'>点击下方按钮检查云端是否有新版本...</div>";
-      html += "      <button type='button' onclick='uiCheckOta()' style='margin-top:10px'>立即检查更新</button>";
-      html += "      <button type='button' id='btnDoUpdate' style='margin-top:10px;margin-left:10px;background:#dc3545;display:none' onclick='uiDoUpdate()'>立即升级</button>";
+      html += "        <div style='padding:15px;background:#f8f9fa;border-radius:6px;border:1px solid #e9ecef;margin-bottom:15px;color:#666;font-size:14px;display:flex;align-items:center;gap:10px'>";
+      html += "          <span style='font-size:18px'>ℹ️</span>";
+      html += "          <span>点击下方按钮检查云端是否有新版本...</span>";
+      html += "        </div>";
     }
+  html += "      </div>";
+  html += "      <div style='margin-top:15px'>";
+  html += "        <button type='button' onclick='uiCheckOta()' style='background:#336699;margin-right:10px'>立即检查更新</button>";
+    if (g_otaUpdateFound) {
+      html += "        <button type='button' id='btnDoUpdate' onclick='uiDoUpdate()' style='background:#dc3545'>立即升级</button>";
+    } else {
+      html += "        <button type='button' id='btnDoUpdate' style='background:#dc3545;display:none' onclick='uiDoUpdate()'>立即升级</button>";
+    }
+  html += "      </div>";
 
   // 回滚功能区
   {
@@ -738,18 +748,22 @@ static void handleHttpRoot() {
   html = "";
   html.reserve(1536);
   html += "async function uiCheckOta(){ "
-          "let s=document.getElementById('otaInfo'); s.innerText='正在连接云端服务...'; "
+          "let s=document.getElementById('otaInfo'); "
+          "s.innerHTML=\"<div style='padding:15px;background:#e2e3e5;border-radius:6px;border:1px solid #d6d8db;color:#383d41;font-size:14px;display:flex;align-items:center;gap:10px'><span style='font-size:18px'>⏳</span><span>正在连接云端服务，请稍候...</span></div>\"; "
           "try{ let r=await fetch('/api/ota/check'); let data=await r.json(); "
           "if(data.found){ "
           "let mdLog = data.changelog.replace(/</g, '&lt;').replace(/>/g, '&gt;')"
           ".replace(/^###\\s+(.*)/gm, '<span style=\"font-size:15px;font-weight:bold;color:#17a2b8;display:inline-block;margin-top:8px\">$1</span>')"
           ".replace(/\\*\\*(.*?)\\*\\*/g, '<b style=\"color:#222\">$1</b>')"
           ".replace(/`(.*?)`/g, '<code style=\"background:#e9ecef;padding:2px 5px;border-radius:4px;color:#d63384\">$1</code>'); "
-          "s.innerHTML=`<div style='margin-bottom:10px'><b style='color:#28a745;font-size:16px'>发现新版本: v${data.version}</b></div>"
-          "<div style='font-size:13px;color:#444;background:#f8f9fa;padding:12px;border-radius:6px;border-left:4px solid #17a2b8;white-space:pre-wrap;line-height:1.6;text-align:left'>${mdLog}</div>`; "
+          "s.innerHTML=`<div style='background:#d4edda;border-left:4px solid #28a745;padding:15px;border-radius:6px;margin-bottom:15px;color:#155724;font-size:14px'><b style='color:#28a745;font-size:16px;display:block;margin-bottom:8px'>🎉 发现新版本: v${data.version}</b><div style='font-size:13px;color:#444;background:#fff;padding:12px;border-radius:4px;border:1px solid #c3e6cb;white-space:pre-wrap;line-height:1.6;text-align:left'>${mdLog}</div></div>`; "
           "document.getElementById('btnDoUpdate').style.display='inline-block'; } "
-          "else { s.innerText='当前已是最新版本 ('+data.version+')'; } "
-          "}catch(e){ s.innerText='检测失败，请检查网络连接'; } }";
+          "else { "
+          "s.innerHTML=`<div style='padding:15px;background:#e8f4fd;border-radius:6px;border:1px solid #bee5eb;color:#0c5460;font-size:14px;display:flex;align-items:center;gap:10px'><span style='font-size:18px'>✨</span><span>当前已是最新版本 (${data.version})</span></div>`; "
+          "} "
+          "}catch(e){ "
+          "s.innerHTML=\"<div style='padding:15px;background:#f8d7da;border-radius:6px;border:1px solid #f5c6cb;color:#721c24;font-size:14px;display:flex;align-items:center;gap:10px'><span style='font-size:18px'>❌</span><span>检测失败，请检查网络连接</span></div>\"; "
+          "} }";
   html += "async function uiDoUpdate(){ "
           "if(!confirm('确定要开始固件升级吗？升级过程中请勿断电，设备将自动重启。'))return; "
           "let btn = document.getElementById('btnDoUpdate'); btn.disabled=true; btn.innerText='正在校验固件...'; "
