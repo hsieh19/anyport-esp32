@@ -135,10 +135,10 @@ static const char REWARD_MODAL_HTML_PART1[] PROGMEM =
     "onclick='uiToggleReward(false)'>&times;</span><h2 "
     "style='margin-top:0;color:#e67e22'>⚡ 赞赏支持</h2><p "
     "style='font-size:14px;color:#666;text-align:center;line-height:1.6;white-space:nowrap'>"
-    "您的支持是 AnyPort 持续优化的最大动力。</p><img src='';
+    "您的支持是 AnyPort 持续优化的最大动力。</p><img src='";
 
 static const char REWARD_MODAL_HTML_PART2[] PROGMEM =
-    "/reward.png' "
+    "/api/reward.png' "
     "style='width:310px;height:auto;border-radius:8px;border:1px solid #eee;'><p "
     "style='font-size:12px;color:#999;margin-top:15px'>微信扫码赞赏作者</p></div>"
     "</div>";
