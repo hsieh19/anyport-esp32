@@ -33,6 +33,7 @@ BridgeConfig g_bridgeConfig = {0, 0, 1, 0, 502, "", 502, 9600, 1, 0, 8};
 EthWifiConfig g_ethWifiConfig = {502, "192.168.1.100", 502, 0};
 NetInterface g_netInterface = NetInterface::AUTO;
 String g_otaApiBase = "https://your-firmware-worker.workers.dev";
+DualMasterConfig g_dualMasterConfig = {9600, 8, 0, 1, 9502};
 
 WebServer g_httpServer(80);
 uint8_t g_rtuRxBuffer[512] __attribute__((aligned(4)));
@@ -54,6 +55,7 @@ unsigned long g_lastHeartbeatMs = 0;
 #include "BridgeHandler.h"
 #include "EthWifiHandler.h"
 #include "TransparentHandler.h"
+#include "DualMasterHandler.h"
 
 // -----------------------
 // 3. 顶层业务逻辑实现
@@ -133,6 +135,13 @@ static void loadPersistentConfig() {
     g_ethWifiConfig.targetPort = g_prefs.getUShort("ewTPort", 502);
     g_ethWifiConfig.protocol = g_prefs.getUChar("ewProto", 0);
 
+    // 双主站模式参数加载
+    g_dualMasterConfig.masterBaud   = g_prefs.getUInt("dmBaud", 9600);
+    g_dualMasterConfig.masterData   = g_prefs.getUChar("dmData", 8);
+    g_dualMasterConfig.masterParity = g_prefs.getUChar("dmParity", 0);
+    g_dualMasterConfig.masterStop   = g_prefs.getUChar("dmStop", 1);
+    g_dualMasterConfig.wifiPort     = g_prefs.getUShort("dmWPort", 9502);
+
     g_prefs.end();
 }
 
@@ -174,6 +183,8 @@ void anyportGatewayLoop() {
         bridgeLoop();
     } else if (g_workMode == WorkMode::ETH_WIFI_BRIDGE) {
         ethWifiBridgeLoop();
+    } else if (g_workMode == WorkMode::DUAL_MASTER) {
+        dualMasterLoop();
     }
 
     otaAutoCheckLoop();

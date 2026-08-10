@@ -44,7 +44,7 @@ static constexpr const char *MQTT_SITE_ID = "office";
 static constexpr const char *MQTT_GATEWAY_ID = "gateway-01";
 static const size_t MQTT_JSON_DOC_SIZE = 1024;
 
-#define FIRMWARE_VERSION "1.5.7"
+#define FIRMWARE_VERSION "1.5.8"
 
 static const uint32_t RS485_DEFAULT_BAUDRATE = 9600;
 static const uint8_t RS485_DEFAULT_DATABITS = 8;
@@ -110,6 +110,16 @@ struct EthWifiConfig {
   uint8_t protocol;    // 0: TCP, 1: UDP
 };
 
+// 双主站模式配置
+struct DualMasterConfig {
+  uint32_t masterBaud;   // RS485_A（原主站侧）波特率
+  uint8_t  masterData;   // 数据位 (7/8)
+  uint8_t  masterParity; // 校验位 (0:None, 1:Even, 2:Odd)
+  uint8_t  masterStop;   // 停止位 (1/2)
+  uint16_t wifiPort;     // WiFi TCP Server 监听端口
+};
+
+
 // 针对 ESP32 核心的 EthernetServer 兼容性封装
 // 修复 "cannot declare variable to be of abstract type" 错误
 class EspEthernetServer : public EthernetServer {
@@ -156,6 +166,7 @@ extern BridgeConfig g_bridgeConfig;
 extern EthWifiConfig g_ethWifiConfig;
 extern NetInterface g_netInterface;
 extern String g_otaApiBase;
+extern DualMasterConfig g_dualMasterConfig;
 
 // -----------------------
 // 5. 调试宏

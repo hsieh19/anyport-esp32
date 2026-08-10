@@ -28,7 +28,7 @@ PROJECT_ID = os.environ.get('PROJECT_ID', 'anyport')
 PROJECT_NAME = os.environ.get('PROJECT_NAME', 'Anyport 串口服务器')
 PROJECT_DESC = os.environ.get('PROJECT_DESC', '多功能工业协议转换网关，提供 Modbus、BACnet 等协议转发及边缘计算支持')
 CHIP_PLATFORM = os.environ.get('CHIP_PLATFORM', 'ESP32C3')
-VERSION = os.environ.get('FIRMWARE_VERSION', 'v1.5.6') # 编译版本号
+VERSION = os.environ.get('FIRMWARE_VERSION', 'v1.5.8') # 编译版本号
 
 LOCAL_FULL_BIN = os.environ.get('LOCAL_FULL_BIN', './build/anyport_Full.bin') # 编译出的量产合并单 bin
 LOCAL_OTA_BIN = os.environ.get('LOCAL_OTA_BIN', './build/anyport_OTA.bin')     # 编译出的 OTA 包

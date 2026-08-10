@@ -202,6 +202,9 @@ static void handleHttpRoot() {
   html += "<option value='5'" +
           String(g_workMode == WorkMode::ETH_WIFI_BRIDGE ? " selected" : "") +
           ">WiFi 转以太网透传模式</option>";
+  html += "<option value='6'" +
+          String(g_workMode == WorkMode::DUAL_MASTER ? " selected" : "") +
+          ">双主站中继网关模式</option>";
   html += "</select>";
   html +=
       "<span class='badge'>当前运行模式: " +
@@ -210,7 +213,7 @@ static void handleHttpRoot() {
                  : (g_workMode == WorkMode::SIMULATOR
                         ? "从站模拟器"
                         : (g_workMode == WorkMode::TRANSPARENT ? "USB 透传"
-                                                               : (g_workMode == WorkMode::BRIDGE ? "RTU-TCP 协议互转" : (g_workMode == WorkMode::FIRMWARE_UPDATE ? "系统固件更新" : "WiFi 转以太网透传"))))) +
+                                                               : (g_workMode == WorkMode::BRIDGE ? "RTU-TCP 协议互转" : (g_workMode == WorkMode::FIRMWARE_UPDATE ? "系统固件更新" : (g_workMode == WorkMode::ETH_WIFI_BRIDGE ? "WiFi 转以太网透传" : "双主站中继网关")))))) +
       "</span>";
   html += "</div>";
 
@@ -578,6 +581,38 @@ static void handleHttpRoot() {
   html += "<label>目标端口 (Ethernet):</label><input name='ewTPort' type='number' value='" + String(g_ethWifiConfig.targetPort) + "'><br>";
   html += "</div>";
 
+  // 9. 模式 F: 双主站中继网关配置
+  html += "<div id='secDualMaster' class='card' style='display:" +
+          String(g_workMode == WorkMode::DUAL_MASTER ? "block" : "none") + "'>";
+  html += "<h2>双主站中继模式配置</h2>";
+  html += "<p style='color:#336699;font-size:13px;background:#e7f3ff;padding:8px;border-radius:4px;border:1px solid #b8daff'><b>💡 说明：</b>UART0 (GPIO20/21) 连接原物理主站 (RS485_A)，UART1 (GPIO2/10) 连接物理从站 (RS485_B)。在 WiFi 上启用 TCP Server 接收 WiFi 主站 (Master 2) 的命令并转发。</p>";
+  
+  html += "<h3>RS485 串口参数 (RS485-A / RS485-B 通用)</h3>";
+  html += "<label>波特率:</label><select name='dmBaud'>";
+  uint32_t bauds_dm[] = {4800, 9600, 19200, 38400, 115200};
+  for (int i = 0; i < 5; i++)
+    html += "<option value='" + String(bauds_dm[i]) + "'" +
+            (g_dualMasterConfig.masterBaud == bauds_dm[i] ? " selected" : "") + ">" +
+            String(bauds_dm[i]) + "</option>";
+  html += "</select><br>";
+
+  html += "<label>数据位:</label><select name='dmData'>";
+  html += "<option value='8' " + String(g_dualMasterConfig.masterData == 8 ? "selected" : "") + ">8位</option>";
+  html += "<option value='7' " + String(g_dualMasterConfig.masterData == 7 ? "selected" : "") + ">7位</option></select><br>";
+
+  html += "<label>检验位:</label><select name='dmParity'>";
+  html += "<option value='0' " + String(g_dualMasterConfig.masterParity == 0 ? "selected" : "") + ">None</option>";
+  html += "<option value='1' " + String(g_dualMasterConfig.masterParity == 1 ? "selected" : "") + ">Even</option>";
+  html += "<option value='2' " + String(g_dualMasterConfig.masterParity == 2 ? "selected" : "") + ">Odd</option></select><br>";
+
+  html += "<label>停止位:</label><select name='dmStop'>";
+  html += "<option value='1' " + String(g_dualMasterConfig.masterStop == 1 ? "selected" : "") + ">1位</option>";
+  html += "<option value='2' " + String(g_dualMasterConfig.masterStop == 2 ? "selected" : "") + ">2位</option></select><br>";
+
+  html += "<h3>WiFi 主站接入 (Master 2)</h3>";
+  html += "<label>TCP 监听端口:</label><input name='dmWPort' type='number' value='" + String(g_dualMasterConfig.wifiPort) + "'><br>";
+  html += "</div>";
+
   html += "<button type='submit' class='save-btn'>保存并重启设备</button>";
   html += "</form>";
   g_httpServer.sendContent(html);
@@ -597,7 +632,8 @@ static void handleHttpRoot() {
       "document.getElementById('secTransparent').style.display=(m=='2'?'block':'none'); "
       "document.getElementById('secBridge').style.display=(m=='3'?'block':'none'); "
       "document.getElementById('secOta').style.display=(m=='4'?'block':'none'); "
-      "document.getElementById('secEthWifi').style.display=(m=='5'?'block':'none'); }";
+      "document.getElementById('secEthWifi').style.display=(m=='5'?'block':'none'); "
+      "document.getElementById('secDualMaster').style.display=(m=='6'?'block':'none'); }";
   html += "function uiToggleBridge(d){ "
           "document.getElementById('bridgeTcpServer').style.display=(d=='0'?'"
           "block':'none'); "
@@ -1044,6 +1080,22 @@ static void handleHttpConfig() {
       g_prefs.putUShort("ewLPort", g_ethWifiConfig.listenPort);
       g_prefs.putString("ewTIp", g_ethWifiConfig.targetIp);
       g_prefs.putUShort("ewTPort", g_ethWifiConfig.targetPort);
+  }
+
+  // 双主站模式保存
+  String dmBaud = g_httpServer.arg("dmBaud");
+  if (dmBaud.length() > 0) {
+      g_dualMasterConfig.masterBaud   = dmBaud.toInt();
+      g_dualMasterConfig.masterData   = g_httpServer.arg("dmData").toInt();
+      g_dualMasterConfig.masterParity = g_httpServer.arg("dmParity").toInt();
+      g_dualMasterConfig.masterStop   = g_httpServer.arg("dmStop").toInt();
+      g_dualMasterConfig.wifiPort     = g_httpServer.arg("dmWPort").toInt();
+
+      g_prefs.putUInt("dmBaud", g_dualMasterConfig.masterBaud);
+      g_prefs.putUChar("dmData", g_dualMasterConfig.masterData);
+      g_prefs.putUChar("dmParity", g_dualMasterConfig.masterParity);
+      g_prefs.putUChar("dmStop", g_dualMasterConfig.masterStop);
+      g_prefs.putUShort("dmWPort", g_dualMasterConfig.wifiPort);
   }
 
   g_prefs.end();
