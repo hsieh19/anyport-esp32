@@ -1,24 +1,20 @@
 /*
  * AnyPort ESP32-C3 网关主程序入口
  *
- * 说明：
- * - 本工程使用 Arduino 风格目录结构：
- *   /esp32
- *     /AnyPortGateway
- *       AnyPortGateway.ino   -> 主程序入口
- *       Config.h             -> 硬件引脚与外设主配置文件
- *
- * - 本文件只负责基础的 setup()/loop() 框架，并调用 Config.h 中定义的初始化函数。
- *   所有引脚定义、WiFi/W5500/RS485 初始化逻辑均在 Config.h 中给出。
+ * 架构分层 (Clean Architecture):
+ * - src/domain/ : 领域模型、协议算法与模拟器核心 (AppTypes, ProtocolUtils, SimulatorDomain)
+ * - src/infra/  : 基础设施与驱动层 (ConfigStore, Rs485Driver, NetworkManager, OtaService)
+ * - src/modes/  : 业务工作模式层 (IWorkMode 接口及 6 大工作模式实现)
+ * - src/api/    : 接口适配层 (HttpApiServer, SystemController, SimulatorController)
+ * - src/app/    : 应用内核编排层 (AppKernel)
  */
 
-#include "Config.h"
+#include "src/app/AppKernel.h"
 
 void setup() {
-    anyportHardwareInit();
+  anyportHardwareInit();
 }
 
 void loop() {
-    anyportGatewayLoop();
+  anyportGatewayLoop();
 }
-

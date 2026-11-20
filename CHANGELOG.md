@@ -2,6 +2,39 @@
 
 所有对 AnyPort ESP32 网关固件的重大更改都将记录在此文件中。
 
+## [2.0] - 2026-11-20
+
+### 架构重塑 (五层整洁架构与前后端彻底分离)
+
+- **固件五层整洁架构重构 (Clean Architecture & SOLID)**：
+  - 彻底废除旧版将 14 个 `.h` 头文件包含在单一编译单元中的反模式，全面拆分为独立的 `.h / .cpp` 编译单元，按单向依赖划分为 5 层（位于 `AnyPortGateway/src/`）：
+    - **`domain/` (领域与协议核心层)**：`AppTypes`、`ProtocolUtils`、`SimulatorDomain`、`BusMonitorDomain`，零外设与外部框架耦合。
+    - **`infra/` (基础设施与驱动层)**：`ConfigStore`（集中收口全部 NVS `Preferences` 读写）、`Rs485Driver`、`NetworkManager`、`OtaService`。
+    - **`modes/` (应用业务层)**：定义 `IWorkMode` (`begin()` / `loop()`) 统一多态生命周期契约，采用编译期静态实例池管理 7 大业务工作模式（零堆内存碎片）。
+    - **`api/` (接口适配层)**：`HttpApiServer`、`SystemController`、`SimulatorController`，提供标准 RESTful JSON API 并支持 CORS 与 Private Network Access (PNA)。
+    - **`app/` (应用内核编排层)**：`AppKernel` 统一编排硬件引导、驱动初始化与多态主循环调度。
+- **前后端彻底分离与 AnyPort 主项目深度集成**：
+  - 设备端剥离繁重的内嵌 HTML 拼接渲染，仅保留 `< 2.5KB` 的极简应急配网页 (`GET /`) 与高性能 JSON API（Flash 占用率优化至 ~53%，RAM 占用率 ~36%）。
+  - 完整的「🎛️ 网关控制台」已作为原生 Vue 3 视图集成至 `AnyPort` 前端主项目，并配合 `anyport-bridge` 本地 `/proxy` 代理接口支持从 Cloudflare Pages (HTTPS) 穿透管理局域网网关。
+
+### 新增与重大增强
+
+- **全新「总线监听与质量诊断模式」(`WorkMode::BUS_MONITOR = 4`)**：
+  - 将报文嗅探从「从站模拟器」中彻底解耦独立，采用 **100% 纯被动高阻态只听不发（零总线写操作）**，可安全并联挂载于任何生产 RS485 总线。
+  - **主从请求-应答 (`Req → Resp`) 自动配对状态机**：基于从站 ID、功能码及请求寄存器字节数/参数签名精准匹配响应帧，彻底杜绝将主站超时重发帧误判为从站响应。
+  - **多维通讯质量看板**：实时统计并输出 **主从应答成功率 (%)**、**从站响应耗时 RTT（当前 / 均值 / 最大峰值 ms）**、**超时无应答次数**、**Modbus 异常响应 (`0x80+`) 计数** 及 **物理层 CRC 校验错帧数**，支持免重启实时过滤从站 ID、功能码与超时阈值 (`/api/monitor/config`)。
+- **全局双通道 RS485 硬件参数池 (`Dual485-Controller-V1` 适配)**：
+  - 在基础配置中全局定义 **485-1 (主站侧端子 · GPIO 2/3)** 与 **485-2 (从站侧端子 · GPIO 5/4)** 的串口通信参数（波特率 1200~921600、数据位、校验位、停止位）。
+  - 各单串口业务模式可直接选择生效物理通道（485-1 或 485-2）并自动复用全局串口参数，彻底消除各业务模式中的重复串口配置。
+- **「以太网-WiFi 跨网段桥接模式 (Mode 5)」升级为双向 × 双协议**：
+  - 新增桥接方向选择 (`direction`)：同时支持 `WiFi → W5500 (无线访有线设备)` 与 `W5500 → WiFi (有线访无线设备)`。
+  - 新增完整的 **UDP 双向跨网段会话转发** (`WiFiUDP ↔ EthernetUDP`)，与 TCP 双向流桥接并列支持 4 种跨网段组合。
+- **「双主站防碰撞中继模式 (Mode 6)」与全局硬件诊断遥测**：
+  - 硬件绑定 `485-1 (UART0 · GPIO 2/3)` 与 `485-2 (UART1 · GPIO 5/4)`，修复 ESP32-C3 双 UART 引脚矩阵重配冲突，支持 `/api/gateway/config` 在线热重载与 `masterTimeout` (100~3000ms) 配置。
+  - `/api/sys/status` 新增芯片结温 (`chipTemp`)、RS485 总线应答延时 (`busLatencyMs`)、双通道通信帧计数、CRC 错误统计以及 DHCP/静态 IP 真实底层网络参数穿透回显。
+- **OTA 校验加固与网络精简**：
+  - 剔除冗余的 `ESPmDNS` 依赖；加固 `/api/ota/check` 对未配置地址、无网络连接及无效响应的显式错误码拦截，消除未配置 OTA 地址时的假阳性提示。
+
 ## [1.5.8] - 2026-08-10
 
 ### 新增功能 (双主站中继网关模式 / Dual Master Relay Gateway)

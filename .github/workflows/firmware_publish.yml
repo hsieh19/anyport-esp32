@@ -90,14 +90,20 @@ jobs:
           mkdir -p "$OTA_DIR" "$FULL_DIR"
 
           # 1. 生成 project.json (供 AnyFlash Worker /api/projects 发现此项目)
-          python3 -c "
-          import json
-          data = {'id': '${PROJECT_ID}', 'name': '${PROJECT_NAME}', 'description': '${PROJECT_DESC}'}
-          print(json.dumps(data, indent=2, ensure_ascii=False))
-          " > out/project.json
+          python3 -c '
+          import json, os
+          data = {
+            "id": os.environ["PROJECT_ID"],
+            "name": os.environ["PROJECT_NAME"],
+            "description": os.environ["PROJECT_DESC"]
+          }
+          with open("out/project.json", "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2, ensure_ascii=False)
+          '
 
           # 2. 合并全量固件包 (供 AnyFlash 网页端烧录, 偏移地址 0x0)
           pip install esptool --quiet
+          APP_BIN=$(ls ./build/*.bin | grep -v "bootloader" | grep -v "partitions" | grep -v "merged" | head -n 1)
           FULL_BIN_NAME="${PROJECT_ID}_Full_v${VERSION}.bin"
           esptool.py --chip "${FLASH_CHIP}" merge_bin \
             -o "${FULL_DIR}/${FULL_BIN_NAME}" \
@@ -106,48 +112,53 @@ jobs:
             --flash_freq "${FLASH_FREQ}" \
             0x0     ./build/*.bootloader.bin \
             0x8000  ./build/*.partitions.bin \
-            0x10000 $(ls ./build/*.bin | grep -v "bootloader" | grep -v "partitions")
+            0x10000 "${APP_BIN}"
 
           # 3. 生成 Full Firmware manifest.json (AnyFlash 烧录网页读取版本信息)
-          FULL_MD5=$(md5sum "${FULL_DIR}/${FULL_BIN_NAME}" | cut -d ' ' -f 1)
-          RELEASE_TIME=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
-          python3 -c "
-          import json
+          export FULL_BIN_NAME
+          export FULL_MD5=$(md5sum "${FULL_DIR}/${FULL_BIN_NAME}" | cut -d ' ' -f 1)
+          export RELEASE_TIME=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+          export FULL_MANIFEST_PATH="${FULL_DIR}/manifest.json"
+          python3 -c '
+          import json, os
           data = {
-            'version': '${VERSION}',
-            'filename': '${FULL_BIN_NAME}',
-            'md5': '${FULL_MD5}',
-            'release_time': '${RELEASE_TIME}'
+            "version": os.environ["VERSION"],
+            "filename": os.environ["FULL_BIN_NAME"],
+            "md5": os.environ["FULL_MD5"],
+            "release_time": os.environ["RELEASE_TIME"]
           }
-          print(json.dumps(data, indent=2))
-          " > "${FULL_DIR}/manifest.json"
+          with open(os.environ["FULL_MANIFEST_PATH"], "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2, ensure_ascii=False)
+          '
           echo "-> Full manifest: ${FULL_DIR}/manifest.json"
 
           # 4. 复制 OTA 固件包 (排除 bootloader 和 partitions 的应用 bin)
-          OTA_BIN_NAME="${PROJECT_ID}_OTA_v${VERSION}.bin"
-          cp $(ls ./build/*.bin | grep -v "bootloader" | grep -v "partitions") "${OTA_DIR}/${OTA_BIN_NAME}"
+          export OTA_BIN_NAME="${PROJECT_ID}_OTA_v${VERSION}.bin"
+          cp "${APP_BIN}" "${OTA_DIR}/${OTA_BIN_NAME}"
 
           # 5. 提取 CHANGELOG 并生成 OTA manifest.json (Worker /api/ota/check 读取)
-          RELEASE_TIME=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
-          OTA_MD5=$(md5sum "${OTA_DIR}/${OTA_BIN_NAME}" | cut -d ' ' -f 1)
-          if [ -f "CHANGELOG.md" ]; then
-            awk "/## \[${VERSION}\]/{flag=1;next}/## \[/{flag=0}flag" CHANGELOG.md > temp_changelog.txt
-            CHANGELOG_JSON=$(python3 -c 'import json,sys; print(json.dumps(sys.stdin.read().strip()))' < temp_changelog.txt)
-          else
-            CHANGELOG_JSON='""'
-          fi
-          python3 -c "
-          import json, sys
-          changelog = ${CHANGELOG_JSON}
+          export OTA_MD5=$(md5sum "${OTA_DIR}/${OTA_BIN_NAME}" | cut -d ' ' -f 1)
+          export OTA_MANIFEST_PATH="${OTA_DIR}/manifest.json"
+          python3 -c '
+          import json, os, re
+          ver = os.environ["VERSION"]
+          changelog = ""
+          if os.path.exists("CHANGELOG.md"):
+            with open("CHANGELOG.md", "r", encoding="utf-8") as cf:
+              text = cf.read()
+            m = re.search(r"## \[" + re.escape(ver) + r"\][^\n]*\n(.*?)(?=\n## \[|\Z)", text, re.S)
+            if m:
+              changelog = m.group(1).strip()
           data = {
-            'version': '${VERSION}',
-            'filename': '${OTA_BIN_NAME}',
-            'md5': '${OTA_MD5}',
-            'release_time': '${RELEASE_TIME}',
-            'changelog': changelog
+            "version": ver,
+            "filename": os.environ["OTA_BIN_NAME"],
+            "md5": os.environ["OTA_MD5"],
+            "release_time": os.environ["RELEASE_TIME"],
+            "changelog": changelog
           }
-          print(json.dumps(data, indent=2))
-          " > "${OTA_DIR}/manifest.json"
+          with open(os.environ["OTA_MANIFEST_PATH"], "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2, ensure_ascii=False)
+          '
           echo "-> OTA manifest: ${OTA_DIR}/manifest.json"
 
       - name: Upload to Cloudflare R2
