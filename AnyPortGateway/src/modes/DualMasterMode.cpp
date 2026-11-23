@@ -1,4 +1,5 @@
 #include "DualMasterMode.h"
+#include "../api/HttpApiServer.h"
 #include "../domain/AppTypes.h"
 #include "../domain/ProtocolUtils.h"
 #include "../infra/Rs485Driver.h"
@@ -10,8 +11,9 @@ static HardwareSerial s_masterSerial(0);
 
 static WiFiServer *s_dmWifiServer = nullptr;
 static WiFiClient s_dmWifiClients[2];
-static volatile bool s_busBusy = false;
 
+// 防碰撞说明：ESP32-C3 主循环在单线程内按序串行调度物理主站 1 (UART0) 与
+// WiFi 主站 2 (TCP)，每次请求—应答事务完整结束后才处理下一笔请求，天然具备总线互斥性。
 static uint8_t s_masterRxBuf[260];
 static size_t s_masterRxLen = 0;
 static unsigned long s_masterLastByteMs = 0;
@@ -68,6 +70,7 @@ static size_t forwardAndCollectResponse(const uint8_t *reqBuf, size_t reqLen,
     } else if (respLen > 0 && (millis() - lastByteTime > frameTimeoutMs)) {
       break;
     }
+    httpServerLoop();
     delay(1);
   }
 
@@ -115,38 +118,29 @@ static void processWifiMasterClient(WiFiClient &client) {
         rtuFrame[len] = crc & 0xFF;
         rtuFrame[len + 1] = crc >> 8;
 
-        unsigned long startLockWait = millis();
-        while (s_busBusy && (millis() - startLockWait < 1000)) {
-          delay(1);
-        }
+        uint8_t respBuf[260];
+        uint16_t timeoutMs = getSafeSlaveTimeoutMs();
+        size_t respLen = forwardAndCollectResponse(
+            rtuFrame, len + 2, respBuf, sizeof(respBuf), timeoutMs);
 
-        if (!s_busBusy) {
-          s_busBusy = true;
-          uint8_t respBuf[260];
-          uint16_t timeoutMs = getSafeSlaveTimeoutMs();
-          size_t respLen = forwardAndCollectResponse(
-              rtuFrame, len + 2, respBuf, sizeof(respBuf), timeoutMs);
-          s_busBusy = false;
+        if (respLen >= 4) {
+          uint16_t rxCrc = (respBuf[respLen - 1] << 8) | respBuf[respLen - 2];
+          if (calculateCRC16(respBuf, respLen - 2) == rxCrc) {
+            g_telemetry.master2FrameCount++;
+            uint8_t tcpResp[260];
+            tcpResp[0] = (tid >> 8);
+            tcpResp[1] = (tid & 0xFF);
+            tcpResp[2] = 0;
+            tcpResp[3] = 0;
+            uint16_t payloadLen = respLen - 2;
+            tcpResp[4] = (payloadLen >> 8);
+            tcpResp[5] = (payloadLen & 0xFF);
+            memcpy(&tcpResp[6], respBuf, payloadLen);
 
-          if (respLen >= 4) {
-            uint16_t rxCrc = (respBuf[respLen - 1] << 8) | respBuf[respLen - 2];
-            if (calculateCRC16(respBuf, respLen - 2) == rxCrc) {
-              g_telemetry.master2FrameCount++;
-              uint8_t tcpResp[260];
-              tcpResp[0] = (tid >> 8);
-              tcpResp[1] = (tid & 0xFF);
-              tcpResp[2] = 0;
-              tcpResp[3] = 0;
-              uint16_t payloadLen = respLen - 2;
-              tcpResp[4] = (payloadLen >> 8);
-              tcpResp[5] = (payloadLen & 0xFF);
-              memcpy(&tcpResp[6], respBuf, payloadLen);
-
-              client.write(tcpResp, payloadLen + 6);
-              client.flush();
-            } else {
-              g_telemetry.busCrcErrorCount++;
-            }
+            client.write(tcpResp, payloadLen + 6);
+            client.flush();
+          } else {
+            g_telemetry.busCrcErrorCount++;
           }
         }
       }
@@ -183,12 +177,10 @@ void DualMasterMode::loop() {
       uint16_t rxCrc = (s_masterRxBuf[s_masterRxLen - 1] << 8) |
                        s_masterRxBuf[s_masterRxLen - 2];
       if (calculateCRC16(s_masterRxBuf, s_masterRxLen - 2) == rxCrc) {
-        s_busBusy = true;
         uint8_t respBuf[260];
         uint16_t timeoutMs = getSafeSlaveTimeoutMs();
         size_t respLen = forwardAndCollectResponse(
             s_masterRxBuf, s_masterRxLen, respBuf, sizeof(respBuf), timeoutMs);
-        s_busBusy = false;
 
         if (respLen >= 4) {
           uint16_t txCrc = (respBuf[respLen - 1] << 8) | respBuf[respLen - 2];

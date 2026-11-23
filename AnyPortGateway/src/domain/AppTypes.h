@@ -26,10 +26,13 @@ static const int PIN_RS485_1_TX = 3;
 static const int PIN_RS485_2_RX = 5;
 static const int PIN_RS485_2_TX = 4;
 
+// 板载 BOOT 按键引脚 (ESP32-C3 原生 Strapping 引脚，启动后作为临时维护 AP 唤醒键，内置上拉，按下为 LOW)
+static const int PIN_BOOT_KEY = 9;
+
 // -----------------------
 // 2. 系统常量定义
 // -----------------------
-#define FIRMWARE_VERSION "2.0"
+#define FIRMWARE_VERSION "2.1"
 
 static constexpr const char *WIFI_AP_SSID = "anyport";
 static constexpr const char *WIFI_AP_PASSWORD = "12345678";

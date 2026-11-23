@@ -9,7 +9,7 @@
 #include <esp_ota_ops.h>
 #include <esp_wifi.h>
 
-static const char EMERGENCY_HTML[] PROGMEM = R"rawliteral(<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>AnyPort Emergency Setup</title><style>body{font-family:system-ui,sans-serif;max-width:480px;margin:20px auto;padding:0 12px;background:#f5f7fa;color:#222}.c{background:#fff;padding:16px;border-radius:8px;box-shadow:0 1px 4px rgba(0,0,0,.08);margin-bottom:14px}h2{margin:0 0 10px;font-size:16px;color:#2563eb}label{display:block;font-size:13px;margin:8px 0 3px;color:#555}input,select{width:100%;box-sizing:border-box;padding:7px;border:1px solid #cbd5e1;border-radius:4px}button{width:100%;margin-top:12px;padding:9px;background:#2563eb;color:#fff;border:0;border-radius:4px;cursor:pointer;font-weight:600}.s{font-size:12px;color:#64748b;line-height:1.7}</style></head><body><div class="c"><h2>AnyPort 应急配网与状态</h2><div id="st" class="s">加载中...</div></div><div class="c"><h2>基础网络与通道配置</h2><label>工作模式</label><select id="wm"><option value="0">0 - MQTT 网关模式</option><option value="1">1 - 从站模拟器模式</option><option value="2">2 - USB 转 RS485 透传</option><option value="3">3 - Modbus 协议互转</option><option value="4">4 - 总线监听与质量诊断</option><option value="5">5 - 以太网-WiFi 桥接</option><option value="6">6 - 双主站中继网关</option></select><label>单串口 RS485 通道</label><select id="ch"><option value="0">0 - 485-1 (主站侧端子)</option><option value="1">1 - 485-2 (从站侧端子)</option></select><label>WiFi SSID</label><input id="ws"><label>WiFi 密码</label><input id="wp" type="password" placeholder="不修改请留空"><label>WiFi 静态 IP (留空为 DHCP)</label><input id="wi" placeholder="留空自动获取"><label>WiFi 子网掩码</label><input id="wmk" placeholder="255.255.255.0"><label>WiFi 默认网关</label><input id="wg"><label>以太网静态 IP (留空不启用)</label><input id="ei"><label>以太网掩码</label><input id="em" placeholder="255.255.255.0"><label>以太网网关</label><input id="eg"><button onclick="save()">保存配置并重启</button></div><script>const $=id=>document.getElementById(id);async function load(){try{let[s,c]=await Promise.all([fetch('/api/sys/status').then(r=>r.json()),fetch('/api/config').then(r=>r.json())]);$('st').innerHTML=`版本: v${s.version} | 运行: ${s.uptime}s | CPU: ${s.cpu}MHz | RAM: ${s.ram}% | Flash: ${s.flash}%<br>WiFi IP: <b>${s.wifiIp}</b> (${s.wifiConnected?'STA':'AP'}) | ETH IP: <b>${s.ethIp}</b>`;$('wm').value=c.workMode;$('ch').value=c.rs485Channel;$('ws').value=c.wifi.ssid;$('wi').value=c.wifi.ip||'';$('wmk').value=c.wifi.mask||'';$('wg').value=c.wifi.gateway||'';$('ei').value=c.eth.ip;$('em').value=c.eth.mask;$('eg').value=c.eth.gateway;}catch(e){$('st').innerText='连接失败: '+e.message;}}async function save(){let b={workMode:+$('wm').value,rs485Channel:+$('ch').value,wifi:{ssid:$('ws').value,password:$('wp').value,ip:$('wi').value,mask:$('wmk').value,gateway:$('wg').value},eth:{ip:$('ei').value,mask:$('em').value,gateway:$('eg').value}};let r=await fetch('/api/config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(b)});let d=await r.json();alert(d.ok?'已保存，设备即将重启':'失败: '+d.error);}load();</script></body></html>)rawliteral";
+static const char EMERGENCY_HTML[] PROGMEM = R"rawliteral(<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>AnyPort Emergency Setup</title><style>body{font-family:system-ui,sans-serif;max-width:480px;margin:20px auto;padding:0 12px;background:#f5f7fa;color:#222}.c{background:#fff;padding:16px;border-radius:8px;box-shadow:0 1px 4px rgba(0,0,0,.08);margin-bottom:14px}h2{margin:0 0 10px;font-size:16px;color:#2563eb}label{display:block;font-size:13px;margin:8px 0 3px;color:#555}input,select{width:100%;box-sizing:border-box;padding:7px;border:1px solid #cbd5e1;border-radius:4px}button{width:100%;margin-top:12px;padding:9px;background:#2563eb;color:#fff;border:0;border-radius:4px;cursor:pointer;font-weight:600}.s{font-size:12px;color:#64748b;line-height:1.7}.ok{background:#ecfdf5;border:1px solid #10b981;color:#065f46;padding:10px;border-radius:6px;margin-top:10px;font-size:13px;display:none}</style></head><body><div class="c"><h2>AnyPort 应急配网与状态</h2><div id="st" class="s">加载中...</div><div id="ipBox" class="ok"></div></div><div class="c"><h2>基础网络与通道配置</h2><label>工作模式</label><select id="wm"><option value="0">0 - MQTT 网关模式</option><option value="1">1 - 从站模拟器模式</option><option value="2">2 - USB 转 RS485 透传</option><option value="3">3 - Modbus 协议互转</option><option value="4">4 - 总线监听与质量诊断</option><option value="5">5 - 以太网-WiFi 桥接</option><option value="6">6 - 双主站中继网关</option></select><label>单串口 RS485 通道</label><select id="ch"><option value="0">0 - 485-1 (主站侧端子)</option><option value="1">1 - 485-2 (从站侧端子)</option></select><label>WiFi SSID</label><input id="ws"><label>WiFi 密码</label><input id="wp" type="password" placeholder="不修改请留空"><label>WiFi 静态 IP (留空为 DHCP)</label><input id="wi" placeholder="留空自动获取"><label>WiFi 子网掩码</label><input id="wmk" placeholder="255.255.255.0"><label>WiFi 默认网关</label><input id="wg"><label>以太网静态 IP (留空不启用)</label><input id="ei"><label>以太网掩码</label><input id="em" placeholder="255.255.255.0"><label>以太网网关</label><input id="eg"><button id="btn" onclick="save()">保存配置并重启</button></div><script>const $=id=>document.getElementById(id);function renderStatus(s){$('st').innerHTML=`版本: v${s.version} | 运行: ${s.uptime}s | CPU: ${s.cpu}MHz | RAM: ${s.ram}% | Flash: ${s.flash}%<br>WiFi IP: <b>${s.wifiIp}</b> (${s.wifiConnected?'STA 已联网':'AP 热点'}) | ETH IP: <b>${s.ethIp}</b>`;}async function load(){try{let[s,c]=await Promise.all([fetch('/api/sys/status').then(r=>r.json()),fetch('/api/config').then(r=>r.json())]);renderStatus(s);$('wm').value=c.workMode;$('ch').value=c.rs485Channel;$('ws').value=c.wifi.ssid;$('wi').value=c.wifi.ip||'';$('wmk').value=c.wifi.mask||'';$('wg').value=c.wifi.gateway||'';$('ei').value=c.eth.ip;$('em').value=c.eth.mask;$('eg').value=c.eth.gateway;}catch(e){$('st').innerText='连接失败: '+e.message;}}async function pollNewIp(){for(let i=0;i<25;i++){await new Promise(r=>setTimeout(r,1500));try{let r=await fetch('/api/sys/status',{cache:'no-store'});if(!r.ok)continue;let s=await r.json();renderStatus(s);if(s.wifiConnected&&s.wifiIp&&s.wifiIp!=='192.168.4.1'&&s.wifiIp!=='0.0.0.0'){$('ipBox').style.display='block';$('ipBox').innerHTML=`<b>已连入 WiFi！新分配 IP：${s.wifiIp}</b><br>请切回局域网访问 <a href="http://${s.wifiIp}" target="_blank">http://${s.wifiIp}</a>`;$('btn').disabled=false;$('btn').innerText='保存配置并重启';return;}}catch(e){}}$('btn').disabled=false;$('btn').innerText='保存配置并重启';load();}async function save(){let b={workMode:+$('wm').value,rs485Channel:+$('ch').value,wifi:{ssid:$('ws').value,password:$('wp').value,ip:$('wi').value,mask:$('wmk').value,gateway:$('wg').value},eth:{ip:$('ei').value,mask:$('em').value,gateway:$('eg').value}};let r=await fetch('/api/config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(b)});let d=await r.json();if(!d.ok){alert('失败: '+d.error);return;}$('btn').disabled=true;$('btn').innerText='设备正在重启联网，正在获取新 IP...';$('ipBox').style.display='none';setTimeout(pollNewIp,2500);}load();</script></body></html>)rawliteral";
 
 // -----------------------
 // 1. 应急配网页与系统状态
@@ -427,53 +427,41 @@ static void handleOtaRollback() {
 // 3.5 双主站模式 (Mode 6 / AnyControl 平台) 在线参数同步与热重载接口
 // -----------------------
 static void handleApiGatewayConfig() {
+  if (!apiRequireJson()) return;
+
+  DynamicJsonDocument doc(512);
+  DeserializationError err = deserializeJson(doc, g_httpServer.arg("plain"));
+  if (err || !doc.is<JsonObject>()) {
+    apiError(400, "invalid_json");
+    return;
+  }
+
+  JsonObject o = doc.as<JsonObject>();
   DualMasterConfig dm = g_dualMasterConfig;
-  String body = g_httpServer.arg("plain");
+  String valErr;
 
-  if (body.length() > 0) {
-    DynamicJsonDocument doc(512);
-    DeserializationError err = deserializeJson(doc, body);
-    if (!err && doc.is<JsonObject>()) {
-      if (doc.containsKey("gatewayName")) {
-        String name = doc["gatewayName"].as<String>();
-        if (name.length() > 0) dm.gatewayName = name;
-      }
-      if (doc.containsKey("baud")) {
-        uint32_t b = doc["baud"].as<uint32_t>();
-        if (b >= 1200 && b <= 921600) dm.masterBaud = b;
-      }
-      if (doc.containsKey("dataBits")) {
-        uint8_t d = doc["dataBits"].as<uint8_t>();
-        if (d == 7 || d == 8) dm.masterData = d;
-      }
-      if (doc.containsKey("parity")) {
-        uint8_t p = doc["parity"].as<uint8_t>();
-        if (p <= 2) dm.masterParity = p;
-      }
-      if (doc.containsKey("stopBits")) {
-        uint8_t s = doc["stopBits"].as<uint8_t>();
-        if (s == 1 || s == 2) dm.masterStop = s;
-      }
-      if (doc.containsKey("wifiPort")) {
-        uint16_t wp = doc["wifiPort"].as<uint16_t>();
-        if (wp > 0) dm.wifiPort = wp;
-      }
-      uint16_t to = 0;
-      if (doc.containsKey("masterTimeout"))
-        to = doc["masterTimeout"].as<uint16_t>();
-      else if (doc.containsKey("timeout"))
-        to = doc["timeout"].as<uint16_t>();
-      if (to >= 100 && to <= 3000) dm.masterTimeout = to;
-
-      if (doc.containsKey("heartbeatInterval")) {
-        uint32_t hb = doc["heartbeatInterval"].as<uint32_t>();
-        if (hb > 0) dm.heartbeatInterval = hb;
-      }
-    }
+  if (!apiStr(o, "gatewayName", 64, dm.gatewayName, valErr)) {
+    apiError(400, valErr);
+    return;
+  }
+  if (o.containsKey("gatewayName") && dm.gatewayName.length() == 0) {
+    apiError(400, "gatewayName_cannot_be_empty");
+    return;
+  }
+  if (!apiNum(o, "baud", 1200, 921600, dm.masterBaud, valErr) ||
+      !apiNum(o, "dataBits", 7, 8, dm.masterData, valErr) ||
+      !apiNum(o, "parity", 0, 2, dm.masterParity, valErr) ||
+      !apiNum(o, "stopBits", 1, 2, dm.masterStop, valErr) ||
+      !apiNum(o, "wifiPort", 1, 65535, dm.wifiPort, valErr) ||
+      !apiNum(o, "masterTimeout", 100, 3000, dm.masterTimeout, valErr) ||
+      !apiNum(o, "timeout", 100, 3000, dm.masterTimeout, valErr) ||
+      !apiNum(o, "heartbeatInterval", 5, 86400, dm.heartbeatInterval, valErr)) {
+    apiError(400, valErr);
+    return;
   }
 
   if (!configSaveDualMasterHotReload(dm)) {
-    apiSendJson(500, "{\"success\":false,\"message\":\"NVS写入失败\"}");
+    apiError(500, "nvs_error");
     return;
   }
 

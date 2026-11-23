@@ -5,9 +5,14 @@
 #include "HttpApiServer.h"
 #include <ArduinoJson.h>
 
+// 32 个寄存器变量 × (11 个字段对象 + 32 字节名称拷贝开销) + 数组容器与安全余量
+static const size_t SIM_REGISTERS_JSON_CAPACITY =
+    JSON_ARRAY_SIZE(MAX_SIM_VARIABLES) +
+    MAX_SIM_VARIABLES * (JSON_OBJECT_SIZE(11) + 32) + 1024;
+
 static void handleGetRegisters(WebServer &server) {
   (void)server;
-  DynamicJsonDocument doc(4096);
+  DynamicJsonDocument doc(SIM_REGISTERS_JSON_CAPACITY);
   JsonArray arr = doc.to<JsonArray>();
   simSyncValuesFromPool();
 
@@ -29,6 +34,11 @@ static void handleGetRegisters(WebServer &server) {
     obj["dynMode"] = static_cast<int>(vars[i].dynMode);
   }
 
+  if (doc.overflowed()) {
+    apiError(500, "json_buffer_overflow");
+    return;
+  }
+
   String out;
   serializeJson(doc, out);
   apiSendJson(200, out);
@@ -41,8 +51,12 @@ static void handleUpdateRegisters(WebServer &server) {
     return;
   }
 
-  DynamicJsonDocument doc(8192);
+  DynamicJsonDocument doc(SIM_REGISTERS_JSON_CAPACITY);
   DeserializationError err = deserializeJson(doc, server.arg("plain"));
+  if (err == DeserializationError::NoMemory || doc.overflowed()) {
+    apiError(500, "json_buffer_overflow");
+    return;
+  }
   if (err || !doc.is<JsonArray>()) {
     Serial.printf("[Web] JSON Parse Error: %s\n", err.c_str());
     apiError(400, "invalid_json");

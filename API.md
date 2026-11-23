@@ -1,4 +1,4 @@
-# AnyPort 设备 HTTP API (v2.0)
+# AnyPort 设备 HTTP API (v2.1)
 
 设备端遵循前后端分离架构，只提供 RESTful JSON API（及 `GET /` 极简应急配网页），完整管理控制台已集成至 AnyPort 前端主项目的「🎛️ 网关控制台」。固件版本见 `GET /api/sys/status`。
 
@@ -19,7 +19,7 @@
 ### 系统与状态遥测
 | 方法 | 路径 | 说明 |
 | :-- | :-- | :-- |
-| GET | `/api/sys/status` | 返回全局硬件、双网实时网络参数与总线通信遥测：`version` `firmware` `gatewayName` `mode` `rs485Channel` `wifiConnected` `wifiIp` `wifiMask` `wifiGw` `wifiDns` `wifiIsStatic` `ethLink` `ethIp` `ethMask` `ethGw` `ethDns` `ethIsStatic` `cpu` `ram`(%) `flash`(%) `rssi` `chipTemp`(℃) `uptime`(s) `heartbeatInterval` `busLatencyMs` `master1Frames` `master2Frames` `busCrcErrors` |
+| GET | `/api/sys/status` | 返回全局硬件、双网实时网络参数与总线通信遥测：`version` `firmware` `gatewayName` `mode` `rs485Channel` `wifiConnected` `wifiIp` `wifiMask` `wifiGw` `wifiDns` `wifiIsStatic` `ethLink` `ethIp` `ethMask` `ethGw` `ethDns` `ethIsStatic` `cpu` `ram`(%) `flash`(%) `rssi` `chipTemp`(℃) `uptime`(s) `heartbeatInterval` `busLatencyMs` `master1Frames` `master2Frames` `busCrcErrors`。<br>**临时维护 AP 与 IP 回显约定**：无论 DHCP 还是静态 IP 模式，网关每次上电/重启连上路由器后（以及运行中短按板载 `BOOT` 键 `GPIO 9` 时），均会开启 `WIFI_AP_STA` 临时维护热点（`anyport` / `192.168.4.1`，当 STA 子网为 `192.168.4.x` 时跳过）；前端在保存重启后可继续轮询 `/api/sys/status` 获取新分配或变更后的 `wifiIp`，当 AP 连续 3 分钟无客户端连接时自动关闭热点切换为纯 `WIFI_STA`。 |
 | GET | `/api/status` | 轻量状态查询：`mode` `uptime` |
 | POST | `/api/mode` | 请求体 `{"mode":0..6}`，保存工作模式并重启 |
 
@@ -28,7 +28,7 @@
 | :-- | :-- | :-- |
 | GET | `/api/config` | 读取全量配置，密码字段以 `********` 返回（未设置则为空串） |
 | POST | `/api/config` | **原子部分/全量更新**：只处理出现的字段；全部校验通过后才写入 NVS，失败返回 400 且不改动任何配置；成功后重启生效 |
-| POST | `/api/gateway/config` | **双主站模式 (Mode 6) 专属热重载接口**：兼容 AnyControl 平台在线下发 `gatewayName`、`baud`、`dataBits`、`parity`、`stopBits`、`wifiPort`、`masterTimeout`、`heartbeatInterval` 并立即热重载双串口（仅在 Mode 6 触发串口重配，不影响其它模式） |
+| POST | `/api/gateway/config` | **双主站模式 (Mode 6) 专属热重载接口**：需 `Content-Type: application/json`，支持在线下发 `gatewayName`、`baud`、`dataBits`、`parity`、`stopBits`、`wifiPort`、`masterTimeout`（或 `timeout`）、`heartbeatInterval`。采用与 `/api/config` 一致的原子参数校验（非法 JSON 或越界字段返回 400 且不写 NVS）；保存时会将串口参数**同时同步至全局 `rs485_1` 与 `rs485_2`**（Mode 6 下两路 RS485 固定同参数），并立即热重载双串口（仅在 Mode 6 触发串口重配，不影响其它模式） |
 
 `/api/config` 字段结构（括号内为取值范围）：
 
@@ -49,7 +49,7 @@
               "targetIp": "", "targetPort": 502, "baud": 9600, "dataBits": 8, "parity": 0, "stopBits": 1 },
   "ethWifi": { "direction": 0, "listenPort": 502, "targetIp": "", "targetPort": 502, "protocol": 0 }, // direction: 0=WiFi->W5500, 1=W5500->WiFi; protocol: 0=TCP, 1=UDP
   "dualMaster": { "gatewayName": "AnyPort 网关", "baud": 9600, "dataBits": 8, "parity": 0, "stopBits": 1,
-                  "wifiPort": 9502, "masterTimeout": 1000, "heartbeatInterval": 30 }
+                  "wifiPort": 9502, "masterTimeout": 1000, "heartbeatInterval": 30 } // 注: Mode 6 下 485-1 与 485-2 共享同一套串口参数，热重载会同步覆写 rs485_1 与 rs485_2
 }
 ```
 通用范围：`baud` 1200..921600，`dataBits` 7/8，`parity` 0无/1偶/2奇，`stopBits` 1/2，端口 1..65535。
@@ -73,6 +73,11 @@
 | POST | `/api/ota/rollback` | 一键回滚至备用 OTA 分区并重启 |
 
 ## 变更记录
+- **v2.1**：
+  - 新增全模式（DHCP + 静态 IP）开机 3 分钟临时维护 AP (`WIFI_AP_STA` · `192.168.4.1`，连续 180s 无客户端连接自动关闭，`192.168.4.x` 子网冲突时自动跳过) 与运行中板载 `BOOT` 键 (`GPIO 9`) 80ms 消抖免重启唤醒机制，配合前端控制台实现配网重启后新 IP 自动回显上报与失联找回。
+  - 加固 `/api/gateway/config` 双主站热重载接口，统一要求 `Content-Type: application/json` 并执行原子参数范围校验。
+  - 加固从站模拟器 Modbus PDU 边界校验（限制 FC01/02 `count <= 2000`、FC03/04 `count <= 125`、FC0F `count <= 1968`、FC10 `count <= 123` 及帧长度一致性），并为 `/api/registers` 增加 JSON 容量公式化计算与溢出 `500` 显式报错。
+  - 修复双主站模式 (Mode 6) 等待从站响应期间阻塞 HTTP 请求的问题，清理单线程下冗余的自旋锁等待。
 - **v2.0**：
   - 固件五层整洁架构 (Clean Architecture) 重构与前后端彻底分离。
   - 新增全局双通道 RS485 参数池 (`rs485_1` / `rs485_2`) 与 `rs485Channel` 物理通道选择。

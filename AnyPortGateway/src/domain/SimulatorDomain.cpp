@@ -274,6 +274,10 @@ int simHandleModbusFrame(const uint8_t *frame, int len, uint8_t *outResponse,
   if (unitId != expectedUnitId) return 0;
 
   uint8_t funcCode = frame[1];
+  if (len < 6) {
+    return makeExceptionResponse(unitId, funcCode, 0x03, outResponse);
+  }
+
   uint16_t startAddr = (frame[2] << 8) | frame[3];
   uint16_t count = (frame[4] << 8) | frame[5];
 
@@ -281,6 +285,8 @@ int simHandleModbusFrame(const uint8_t *frame, int len, uint8_t *outResponse,
   outResponse[1] = funcCode;
 
   if (funcCode == 0x01 || funcCode == 0x02) {
+    if (count == 0 || count > 2000)
+      return makeExceptionResponse(unitId, funcCode, 0x03, outResponse);
     uint8_t exc = checkAddressRange(startAddr, count, true);
     if (exc != 0) return makeExceptionResponse(unitId, funcCode, exc, outResponse);
 
@@ -295,6 +301,8 @@ int simHandleModbusFrame(const uint8_t *frame, int len, uint8_t *outResponse,
     }
     return 3 + byteCount;
   } else if (funcCode == 0x03 || funcCode == 0x04) {
+    if (count == 0 || count > 125)
+      return makeExceptionResponse(unitId, funcCode, 0x03, outResponse);
     uint8_t exc = checkAddressRange(startAddr, count, false);
     if (exc != 0) return makeExceptionResponse(unitId, funcCode, exc, outResponse);
 
@@ -314,6 +322,13 @@ int simHandleModbusFrame(const uint8_t *frame, int len, uint8_t *outResponse,
     memcpy(&outResponse[2], &frame[2], 4);
     return 6;
   } else if (funcCode == 0x0F) {
+    if (count == 0 || count > 1968 || len < 7)
+      return makeExceptionResponse(unitId, funcCode, 0x03, outResponse);
+    uint8_t expectedBytes = static_cast<uint8_t>((count + 7) / 8);
+    uint8_t byteCount = frame[6];
+    if (byteCount != expectedBytes || len != 7 + static_cast<int>(byteCount))
+      return makeExceptionResponse(unitId, funcCode, 0x03, outResponse);
+
     uint8_t exc = checkAddressRange(startAddr, count, true);
     if (exc != 0) return makeExceptionResponse(unitId, funcCode, exc, outResponse);
 
@@ -331,6 +346,13 @@ int simHandleModbusFrame(const uint8_t *frame, int len, uint8_t *outResponse,
     memcpy(&outResponse[2], &frame[2], 4);
     return 6;
   } else if (funcCode == 0x10) {
+    if (count == 0 || count > 123 || len < 7)
+      return makeExceptionResponse(unitId, funcCode, 0x03, outResponse);
+    uint8_t expectedBytes = static_cast<uint8_t>(count * 2);
+    uint8_t byteCount = frame[6];
+    if (byteCount != expectedBytes || len != 7 + static_cast<int>(byteCount))
+      return makeExceptionResponse(unitId, funcCode, 0x03, outResponse);
+
     uint8_t exc = checkAddressRange(startAddr, count, false);
     if (exc != 0) return makeExceptionResponse(unitId, funcCode, exc, outResponse);
 

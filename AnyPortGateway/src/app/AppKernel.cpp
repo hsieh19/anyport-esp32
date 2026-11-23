@@ -78,6 +78,7 @@ void anyportGatewayLoop() {
   }
 
   otaAutoCheckLoop();
+  networkLoop();
   httpServerLoop();
 
   if (g_needRestart) {

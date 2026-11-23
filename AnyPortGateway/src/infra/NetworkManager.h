@@ -22,3 +22,4 @@ extern uint8_t g_macAddress[6];
 
 void initWifi();
 void initSpiAndEthernet();
+void networkLoop();

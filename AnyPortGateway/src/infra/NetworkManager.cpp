@@ -2,6 +2,36 @@
 
 uint8_t g_macAddress[6];
 
+static bool s_tempApActive = false;
+static unsigned long s_tempApIdleSinceMs = 0;
+static const unsigned long TEMP_AP_IDLE_TIMEOUT_MS = 180000UL; // 无客户端连接持续 3 分钟后关闭临时 AP
+
+// BOOT 键 (GPIO 9) 非阻塞消抖状态
+static bool s_bootKeyPressed = false;
+static bool s_bootKeyHandled = false;
+static unsigned long s_bootKeyDownMs = 0;
+static const unsigned long BOOT_KEY_DEBOUNCE_MS = 80UL;
+
+static void enableTempMaintenanceAp(const char *reason) {
+  IPAddress staIp = WiFi.localIP();
+  if (staIp[0] == 192 && staIp[1] == 168 && staIp[2] == 4) {
+    APP_PRINTLN("[WiFi] Warning: STA subnet (192.168.4.x) conflicts with SoftAP, skipping temporary AP");
+    s_tempApActive = false;
+    return;
+  }
+
+  if (!s_tempApActive) {
+    WiFi.mode(WIFI_AP_STA);
+    delay(50);
+    WiFi.softAP(WIFI_AP_SSID, WIFI_AP_PASSWORD);
+    s_tempApActive = true;
+  }
+  s_tempApIdleSinceMs = millis();
+  APP_LOG("[WiFi] Temporary maintenance AP active (%s, SSID: %s, AP IP: %s, STA IP: %s, auto-off after 180s idle)",
+          reason, WIFI_AP_SSID, WiFi.softAPIP().toString().c_str(),
+          staIp.toString().c_str());
+}
+
 // -----------------------
 // 1. W5500 PHYCFGR 寄存器底层操作 (0x002E)
 // -----------------------
@@ -71,6 +101,7 @@ static void applyEthConfig() {
 // 2. WiFi / NTP / W5500 初始化接口实现
 // -----------------------
 void initWifi() {
+  pinMode(PIN_BOOT_KEY, INPUT_PULLUP);
   WiFi.persistent(false);
   WiFi.disconnect(true);
   delay(100);
@@ -101,21 +132,65 @@ void initWifi() {
       WiFi.mode(WIFI_AP);
       delay(100);
       WiFi.softAP(WIFI_AP_SSID, WIFI_AP_PASSWORD);
+      s_tempApActive = false;
+    } else {
+      IPAddress staIp = WiFi.localIP();
+      APP_PRINT("WiFi STA connected, IP: ");
+      APP_PRINTLN(staIp);
+
+      // 无论 DHCP 还是静态 IP，每次开机联网后均开启 3 分钟临时维护 AP，防止 IP 漂移、遗忘或静态 IP 配错失联
+      enableTempMaintenanceAp("boot");
     }
   } else {
     WiFi.mode(WIFI_AP);
     delay(100);
     WiFi.softAP(WIFI_AP_SSID, WIFI_AP_PASSWORD);
+    s_tempApActive = false;
   }
 
-  if (WiFi.getMode() == WIFI_STA && WiFi.status() == WL_CONNECTED) {
-    APP_PRINT("WiFi STA connected, IP: ");
-    APP_PRINTLN(WiFi.localIP());
-  } else {
+  if (WiFi.status() != WL_CONNECTED) {
     APP_PRINT("WiFi AP mode started, SSID: ");
     APP_PRINTLN(WIFI_AP_SSID);
     APP_PRINT("AP IP: ");
     APP_PRINTLN(WiFi.softAPIP());
+  }
+}
+
+void networkLoop() {
+  unsigned long now = millis();
+
+  // 1. 非阻塞轮询板载 BOOT 键 (GPIO 9，按下为 LOW)，80ms 消抖唤醒/续期 3 分钟临时维护 AP
+  bool isLow = (digitalRead(PIN_BOOT_KEY) == LOW);
+  if (isLow) {
+    if (!s_bootKeyPressed) {
+      s_bootKeyPressed = true;
+      s_bootKeyHandled = false;
+      s_bootKeyDownMs = now;
+    } else if (!s_bootKeyHandled && (now - s_bootKeyDownMs >= BOOT_KEY_DEBOUNCE_MS)) {
+      s_bootKeyHandled = true;
+      if (WiFi.status() == WL_CONNECTED) {
+        enableTempMaintenanceAp("BOOT key wakeup");
+      }
+    }
+  } else {
+    s_bootKeyPressed = false;
+    s_bootKeyHandled = false;
+  }
+
+  // 2. 临时维护 AP 空闲超时自毁巡检
+  if (!s_tempApActive) return;
+
+  // 仅在 STA 已连网且 AP 无客户端接入时累计空闲时间；有客户端连接时自动顺延
+  if (WiFi.status() != WL_CONNECTED || WiFi.softAPgetStationNum() > 0) {
+    s_tempApIdleSinceMs = now;
+    return;
+  }
+
+  if (now - s_tempApIdleSinceMs >= TEMP_AP_IDLE_TIMEOUT_MS) {
+    APP_PRINTLN("[WiFi] Temporary maintenance AP idle for 180s, shutting down SoftAP...");
+    WiFi.softAPdisconnect(true);
+    WiFi.mode(WIFI_STA);
+    s_tempApActive = false;
   }
 }
 
