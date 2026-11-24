@@ -23,7 +23,7 @@ uint8_t g_transStopBits = 1;
 
 BridgeConfig g_bridgeConfig = {0, 0, 1, 0, 502, "", 502, 9600, 1, 0, 8};
 EthWifiConfig g_ethWifiConfig = {0, 502, "192.168.1.100", 502, 0};
-DualMasterConfig g_dualMasterConfig = {"AnyPort 网关", 9600, 8, 0, 1, 9502, 1000, 30};
+DualMasterConfig g_dualMasterConfig = {"AnyPort 网关", 0, 1, 9600, 8, 0, 1, 9502, 1000, 30};
 NetInterface g_netInterface = NetInterface::AUTO;
 SystemTelemetry g_telemetry = {0, 0, 0, 0};
 
@@ -140,6 +140,10 @@ void configLoadAll() {
   // 全局网关名称与双主站模式参数加载
   g_dualMasterConfig.gatewayName =
       s_prefs.getString("gwName", "AnyPort 网关");
+  g_dualMasterConfig.proxyMode =
+      s_prefs.getUChar("dmMode", 0) == 1 ? 1 : 0;
+  uint8_t dmSid = s_prefs.getUChar("dmSlaveId", 1);
+  g_dualMasterConfig.slaveId = (dmSid >= 1 && dmSid <= 247) ? dmSid : 1;
   g_dualMasterConfig.masterBaud =
       s_prefs.getUInt("dmBaud", g_rs485_1Config.baud);
   g_dualMasterConfig.masterData =
@@ -266,6 +270,9 @@ bool configSaveSystem(uint8_t workMode, uint8_t rsCh, const String &otaApi,
   if (dm.gatewayName.length() > 0) {
     s_prefs.putString("gwName", dm.gatewayName);
   }
+  s_prefs.putUChar("dmMode", dm.proxyMode == 1 ? 1 : 0);
+  s_prefs.putUChar("dmSlaveId",
+                   (dm.slaveId >= 1 && dm.slaveId <= 247) ? dm.slaveId : 1);
   s_prefs.putUInt("dmBaud", dm.masterBaud);
   s_prefs.putUChar("dmData", dm.masterData);
   s_prefs.putUChar("dmParity", dm.masterParity);
@@ -307,6 +314,9 @@ bool configSaveDualMasterHotReload(const DualMasterConfig &dm) {
   if (dm.gatewayName.length() > 0) {
     s_prefs.putString("gwName", dm.gatewayName);
   }
+  s_prefs.putUChar("dmMode", dm.proxyMode == 1 ? 1 : 0);
+  s_prefs.putUChar("dmSlaveId",
+                   (dm.slaveId >= 1 && dm.slaveId <= 247) ? dm.slaveId : 1);
   s_prefs.putUInt("dmBaud", dm.masterBaud);
   s_prefs.putUChar("dmData", dm.masterData);
   s_prefs.putUChar("dmParity", dm.masterParity);

@@ -1,4 +1,4 @@
-# AnyPort 设备 HTTP API (v2.1)
+# AnyPort 设备 HTTP API (v2.2)
 
 设备端遵循前后端分离架构，只提供 RESTful JSON API（及 `GET /` 极简应急配网页），完整管理控制台已集成至 AnyPort 前端主项目的「🎛️ 网关控制台」。固件版本见 `GET /api/sys/status`。
 
@@ -28,7 +28,7 @@
 | :-- | :-- | :-- |
 | GET | `/api/config` | 读取全量配置，密码字段以 `********` 返回（未设置则为空串） |
 | POST | `/api/config` | **原子部分/全量更新**：只处理出现的字段；全部校验通过后才写入 NVS，失败返回 400 且不改动任何配置；成功后重启生效 |
-| POST | `/api/gateway/config` | **双主站模式 (Mode 6) 专属热重载接口**：需 `Content-Type: application/json`，支持在线下发 `gatewayName`、`baud`、`dataBits`、`parity`、`stopBits`、`wifiPort`、`masterTimeout`（或 `timeout`）、`heartbeatInterval`。采用与 `/api/config` 一致的原子参数校验（非法 JSON 或越界字段返回 400 且不写 NVS）；保存时会将串口参数**同时同步至全局 `rs485_1` 与 `rs485_2`**（Mode 6 下两路 RS485 固定同参数），并立即热重载双串口（仅在 Mode 6 触发串口重配，不影响其它模式） |
+| POST | `/api/gateway/config` | **双主站模式 (Mode 6) 专属热重载接口**：需 `Content-Type: application/json`，支持在线下发 `gatewayName`、`proxyMode` (0:总线代理, 1:设备代理)、`slaveId` (1..247)、`baud`、`dataBits`、`parity`、`stopBits`、`wifiPort`、`masterTimeout`（或 `timeout`）、`heartbeatInterval`。采用与 `/api/config` 一致的原子参数校验（非法 JSON 或越界字段返回 400 且不写 NVS）；保存时会将串口参数**同时同步至全局 `rs485_1` 与 `rs485_2`**（Mode 6 下两路 RS485 固定同参数），并立即热重载双串口（仅在 Mode 6 触发串口重配，不影响其它模式） |
 
 `/api/config` 字段结构（括号内为取值范围）：
 
@@ -48,8 +48,8 @@
   "bridge": { "direction": 0, "mode": 0, "slaveId": 1, "netInterface": 0, "tcpPort": 502,
               "targetIp": "", "targetPort": 502, "baud": 9600, "dataBits": 8, "parity": 0, "stopBits": 1 },
   "ethWifi": { "direction": 0, "listenPort": 502, "targetIp": "", "targetPort": 502, "protocol": 0 }, // direction: 0=WiFi->W5500, 1=W5500->WiFi; protocol: 0=TCP, 1=UDP
-  "dualMaster": { "gatewayName": "AnyPort 网关", "baud": 9600, "dataBits": 8, "parity": 0, "stopBits": 1,
-                  "wifiPort": 9502, "masterTimeout": 1000, "heartbeatInterval": 30 } // 注: Mode 6 下 485-1 与 485-2 共享同一套串口参数，热重载会同步覆写 rs485_1 与 rs485_2
+  "dualMaster": { "gatewayName": "AnyPort 网关", "proxyMode": 0, "slaveId": 1, "baud": 9600, "dataBits": 8, "parity": 0, "stopBits": 1,
+                  "wifiPort": 9502, "masterTimeout": 1000, "heartbeatInterval": 30 } // 注: proxyMode: 0=总线代理(串联接原主站出口), 1=设备代理(并联公共总线仅代理slaveId); Mode 6 下 485-1 与 485-2 共享同一套串口参数，热重载会同步覆写 rs485_1 与 rs485_2
 }
 ```
 通用范围：`baud` 1200..921600，`dataBits` 7/8，`parity` 0无/1偶/2奇，`stopBits` 1/2，端口 1..65535。
@@ -73,6 +73,10 @@
 | POST | `/api/ota/rollback` | 一键回滚至备用 OTA 分区并重启 |
 
 ## 变更记录
+- **v2.2**：
+  - **双主站中继网关 (Mode 6) 双拓扑架构**：新增 `proxyMode`（`0`: 总线代理 Bus Proxy，`1`: 设备代理 Device Proxy）与目标从站地址 `slaveId` (1..247) 配置；在设备代理模式下并联多从站公共总线，自动扫描剥离 `slaveId` 目标请求帧并静默旁路其他从站流量，避免误报 CRC 错误；485-1 接收超时弃用固定 15ms，改用波特率自适应计算 3.5T 字符间隔；WiFi 主站接入从站 ID 权限过滤。
+  - **总线监听诊断 (Mode 4) 智能粘包切分引擎**：引入标准 Modbus PDU 结构启发式判定与 3.5T + 串口物理耗时推算；支持将密集轮询下的串口粘包自动切分为最多 16 个合法 CRC 子帧切片，并从最后一帧完成时刻向前回溯各子帧真实物理完成时间戳，彻底消除粘包对从站 RTT 与主从配对的干扰。
+  - **工业级 WiFi 射频低延时与高可靠加固**：彻底关闭 Modem Sleep 省电休眠 (`WIFI_PS_NONE`)，消除 DTIM 唤醒延迟与丢包；锁定 19.5dBm 最大发射功率与 HT20 (20MHz) 窄频宽降噪；启用全信道最优 RSSI 信号择优漫游；增加 STA 掉线后每 20s 后台自愈自动重连机制。
 - **v2.1**：
   - 新增全模式（DHCP + 静态 IP）开机 3 分钟临时维护 AP (`WIFI_AP_STA` · `192.168.4.1`，连续 180s 无客户端连接自动关闭，`192.168.4.x` 子网冲突时自动跳过) 与运行中板载 `BOOT` 键 (`GPIO 9`) 80ms 消抖免重启唤醒机制，配合前端控制台实现配网重启后新 IP 自动回显上报与失联找回。
   - 加固 `/api/gateway/config` 双主站热重载接口，统一要求 `Content-Type: application/json` 并执行原子参数范围校验。

@@ -1,16 +1,30 @@
 #include "NetworkManager.h"
+#include <esp_wifi.h>
 
 uint8_t g_macAddress[6];
 
 static bool s_tempApActive = false;
 static unsigned long s_tempApIdleSinceMs = 0;
 static const unsigned long TEMP_AP_IDLE_TIMEOUT_MS = 180000UL; // 无客户端连接持续 3 分钟后关闭临时 AP
+static unsigned long s_lastReconnectAttemptMs = 0;
+static const unsigned long WIFI_RECONNECT_INTERVAL_MS = 20000UL; // STA 断线后台重连间隔 (20s)
 
 // BOOT 键 (GPIO 9) 非阻塞消抖状态
 static bool s_bootKeyPressed = false;
 static bool s_bootKeyHandled = false;
 static unsigned long s_bootKeyDownMs = 0;
 static const unsigned long BOOT_KEY_DEBOUNCE_MS = 80UL;
+
+// 统一应用工业级 WiFi 射频与低延迟优化：
+// 1. 彻底关闭 Modem Sleep 省电休眠 (WIFI_PS_NONE)，消除数千毫秒的 DTIM 唤醒延迟与弱信号丢包
+// 2. 锁定最大发射功率 19.5dBm，增强弱信号边缘上行回传穿透力
+// 3. 锁定 20MHz 窄频宽 (HT20)，降低 3dB 底噪并提升工业现场抗邻频干扰与接收灵敏度
+static void applyWifiRfOptimizations() {
+  WiFi.setSleep(false);
+  esp_wifi_set_ps(WIFI_PS_NONE);
+  WiFi.setTxPower(WIFI_POWER_19_5dBm);
+  esp_wifi_set_bandwidth(WIFI_IF_STA, WIFI_BW_HT20);
+}
 
 static void enableTempMaintenanceAp(const char *reason) {
   IPAddress staIp = WiFi.localIP();
@@ -22,6 +36,7 @@ static void enableTempMaintenanceAp(const char *reason) {
 
   if (!s_tempApActive) {
     WiFi.mode(WIFI_AP_STA);
+    applyWifiRfOptimizations();
     delay(50);
     WiFi.softAP(WIFI_AP_SSID, WIFI_AP_PASSWORD);
     s_tempApActive = true;
@@ -108,6 +123,12 @@ void initWifi() {
 
   if (g_wifiStaConfig.valid) {
     WiFi.mode(WIFI_STA);
+    applyWifiRfOptimizations();
+    // 全信道扫描同名 SSID 并按最强信号 (RSSI) 择优接入，避免多 AP 环境下误连远端弱信号节点
+    WiFi.setScanMethod(WIFI_ALL_CHANNEL_SCAN);
+    WiFi.setSortMethod(WIFI_CONNECT_AP_BY_SIGNAL);
+    WiFi.setAutoReconnect(true);
+
     if (g_wifiStaConfig.staticIp &&
         static_cast<uint32_t>(g_wifiStaConfig.ip) != 0) {
       WiFi.config(g_wifiStaConfig.ip, g_wifiStaConfig.gateway,
@@ -126,23 +147,24 @@ void initWifi() {
     }
 
     if (WiFi.status() != WL_CONNECTED) {
-      APP_PRINTLN("WiFi Timed out, using AP mode");
-      WiFi.disconnect(true);
-      delay(200);
-      WiFi.mode(WIFI_AP);
+      APP_PRINTLN("WiFi Timed out, using AP+STA mode with background retry");
+      WiFi.mode(WIFI_AP_STA);
+      applyWifiRfOptimizations();
       delay(100);
       WiFi.softAP(WIFI_AP_SSID, WIFI_AP_PASSWORD);
       s_tempApActive = false;
+      s_lastReconnectAttemptMs = millis();
     } else {
       IPAddress staIp = WiFi.localIP();
-      APP_PRINT("WiFi STA connected, IP: ");
-      APP_PRINTLN(staIp);
+      APP_LOG("[WiFi] STA connected, IP: %s, BSSID: %s, RSSI: %d dBm",
+              staIp.toString().c_str(), WiFi.BSSIDstr().c_str(), WiFi.RSSI());
 
       // 无论 DHCP 还是静态 IP，每次开机联网后均开启 3 分钟临时维护 AP，防止 IP 漂移、遗忘或静态 IP 配错失联
       enableTempMaintenanceAp("boot");
     }
   } else {
     WiFi.mode(WIFI_AP);
+    applyWifiRfOptimizations();
     delay(100);
     WiFi.softAP(WIFI_AP_SSID, WIFI_AP_PASSWORD);
     s_tempApActive = false;
@@ -177,7 +199,18 @@ void networkLoop() {
     s_bootKeyHandled = false;
   }
 
-  // 2. 临时维护 AP 空闲超时自毁巡检
+  // 2. STA 异常掉线后台自动重连兜底巡检 (无 AP 客户端正在配网时每 20s 触发一次重连)
+  if (g_wifiStaConfig.valid && WiFi.status() != WL_CONNECTED) {
+    if (now - s_lastReconnectAttemptMs >= WIFI_RECONNECT_INTERVAL_MS) {
+      s_lastReconnectAttemptMs = now;
+      if (WiFi.softAPgetStationNum() == 0) {
+        APP_PRINTLN("[WiFi] STA disconnected, triggering background reconnect...");
+        WiFi.reconnect();
+      }
+    }
+  }
+
+  // 3. 临时维护 AP 空闲超时自毁巡检
   if (!s_tempApActive) return;
 
   // 仅在 STA 已连网且 AP 无客户端接入时累计空闲时间；有客户端连接时自动顺延
@@ -190,6 +223,7 @@ void networkLoop() {
     APP_PRINTLN("[WiFi] Temporary maintenance AP idle for 180s, shutting down SoftAP...");
     WiFi.softAPdisconnect(true);
     WiFi.mode(WIFI_STA);
+    applyWifiRfOptimizations();
     s_tempApActive = false;
   }
 }

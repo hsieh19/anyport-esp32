@@ -193,6 +193,8 @@ static void handleApiConfigGet() {
 
   JsonObject dm = doc.createNestedObject("dualMaster");
   dm["gatewayName"] = g_dualMasterConfig.gatewayName;
+  dm["proxyMode"] = g_dualMasterConfig.proxyMode;
+  dm["slaveId"] = g_dualMasterConfig.slaveId;
   dm["baud"] = g_dualMasterConfig.masterBaud;
   dm["dataBits"] = g_dualMasterConfig.masterData;
   dm["parity"] = g_dualMasterConfig.masterParity;
@@ -321,6 +323,8 @@ static bool apiParseAndCommitConfig(JsonObject root, String &err) {
   if (root.containsKey("dualMaster")) {
     JsonObject o = root["dualMaster"];
     if (!apiStr(o, "gatewayName", 64, dm.gatewayName, err)) return false;
+    if (!apiNum(o, "proxyMode", 0, 1, dm.proxyMode, err)) return false;
+    if (!apiNum(o, "slaveId", 1, 247, dm.slaveId, err)) return false;
     if (!apiNum(o, "baud", 1200, 921600, dm.masterBaud, err)) return false;
     if (!apiNum(o, "dataBits", 7, 8, dm.masterData, err)) return false;
     if (!apiNum(o, "parity", 0, 2, dm.masterParity, err)) return false;
@@ -448,7 +452,9 @@ static void handleApiGatewayConfig() {
     apiError(400, "gatewayName_cannot_be_empty");
     return;
   }
-  if (!apiNum(o, "baud", 1200, 921600, dm.masterBaud, valErr) ||
+  if (!apiNum(o, "proxyMode", 0, 1, dm.proxyMode, valErr) ||
+      !apiNum(o, "slaveId", 1, 247, dm.slaveId, valErr) ||
+      !apiNum(o, "baud", 1200, 921600, dm.masterBaud, valErr) ||
       !apiNum(o, "dataBits", 7, 8, dm.masterData, valErr) ||
       !apiNum(o, "parity", 0, 2, dm.masterParity, valErr) ||
       !apiNum(o, "stopBits", 1, 2, dm.masterStop, valErr) ||
@@ -475,6 +481,8 @@ static void handleApiGatewayConfig() {
   resp["message"] = "双主站通信串口参数、超时与网关名称已更新生效";
   JsonObject data = resp.createNestedObject("data");
   data["gatewayName"] = g_dualMasterConfig.gatewayName;
+  data["proxyMode"] = g_dualMasterConfig.proxyMode;
+  data["slaveId"] = g_dualMasterConfig.slaveId;
   data["baud"] = g_dualMasterConfig.masterBaud;
   data["dataBits"] = g_dualMasterConfig.masterData;
   data["parity"] = g_dualMasterConfig.masterParity;

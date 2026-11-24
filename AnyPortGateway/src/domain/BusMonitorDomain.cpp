@@ -153,6 +153,31 @@ static bool isMasterRequestStructure(const uint8_t *data, size_t len) {
   return (len == 8);
 }
 
+static bool hasValidFrameCrc(const uint8_t *data, size_t len) {
+  if (len < 4) return false;
+  uint16_t rxCrc = (data[len - 1] << 8) | data[len - 2];
+  return calculateCRC16(data, len - 2) == rxCrc;
+}
+
+// 判断候选子帧长度是否符合标准 Modbus RTU 请求、正常应答或异常应答结构 (用于粘包拆帧)
+static bool isPlausibleModbusSubFrame(const uint8_t *f, size_t n) {
+  if (n < 5 || f[0] > 247) return false;
+  uint8_t fc = f[1];
+  if ((fc & 0x80) != 0) {
+    return (n == 5);
+  }
+  if (fc >= 0x01 && fc <= 0x04) {
+    return (n == 8) || (n >= 6 && n == static_cast<size_t>(5 + f[2]));
+  }
+  if (fc == 0x05 || fc == 0x06) {
+    return (n == 8);
+  }
+  if (fc == 0x0F || fc == 0x10) {
+    return (n == 8) || (n >= 10 && n == static_cast<size_t>(9 + f[6]));
+  }
+  return false;
+}
+
 void busMonitorCheckTimeout() {
   if (!s_pendingReq.active) return;
   uint16_t limitMs =
@@ -165,9 +190,9 @@ void busMonitorCheckTimeout() {
   }
 }
 
-void busMonitorProcessFrame(const uint8_t *data, size_t len) {
+static void busMonitorProcessSingleFrameAt(const uint8_t *data, size_t len,
+                                           unsigned long now) {
   if (len == 0) return;
-  unsigned long now = millis();
 
   // 先检查上一笔挂起请求是否已经超过了静默超时阈值
   busMonitorCheckTimeout();
@@ -178,16 +203,7 @@ void busMonitorProcessFrame(const uint8_t *data, size_t len) {
   uint8_t fc = (len > 1) ? data[1] : 0;
 
   // 1. 校验物理帧长度与 CRC16
-  if (len < 4) {
-    s_qualityStats.crcErrorCount++;
-    g_telemetry.busCrcErrorCount++;
-    appendMonitorLog(now, BusFrameMeta::CRC_ERR, uid, fc, 0, data, len);
-    return;
-  }
-
-  uint16_t rxCrc = (data[len - 1] << 8) | data[len - 2];
-  uint16_t calcCrc = calculateCRC16(data, len - 2);
-  if (rxCrc != calcCrc) {
+  if (len < 4 || !hasValidFrameCrc(data, len)) {
     s_qualityStats.crcErrorCount++;
     g_telemetry.busCrcErrorCount++;
     appendMonitorLog(now, BusFrameMeta::CRC_ERR, uid, fc, 0, data, len);
@@ -232,5 +248,79 @@ void busMonitorProcessFrame(const uint8_t *data, size_t len) {
     appendMonitorLog(now, BusFrameMeta::REQ, uid, fc, 0, data, len);
   } else {
     appendMonitorLog(now, BusFrameMeta::RESP, uid, fc, 0, data, len);
+  }
+}
+
+// 根据当前通道串口参数与帧字节长度，计算粘包后一帧在总线上的物理耗时 (3.5T 帧间隔 + 串口传输耗时)
+static unsigned long calcSubFramePhysicalSpanMs(size_t frameBytes) {
+  const Rs485PortConfig &cfg =
+      (g_rs485Channel == 1) ? g_rs485_2Config : g_rs485_1Config;
+  uint32_t baud = cfg.baud > 0 ? cfg.baud : 9600;
+  uint32_t bitsPerByte =
+      1 + cfg.dataBits + (cfg.parity != 0 ? 1 : 0) + cfg.stopBits;
+  uint32_t wireMs =
+      (static_cast<uint32_t>(frameBytes) * bitsPerByte * 1000 + baud / 2) /
+      baud;
+  if (wireMs == 0) wireMs = 1;
+  uint32_t turnaroundMs = (35 * 1000 + baud / 2) / baud;
+  if (turnaroundMs == 0) turnaroundMs = 1;
+  return wireMs + turnaroundMs;
+}
+
+void busMonitorProcessFrame(const uint8_t *data, size_t len) {
+  if (len == 0) return;
+  unsigned long now = millis();
+
+  // 单帧快速路径：本身已是合法 CRC 帧或不足最小拆帧长度
+  if (len < 10 || hasValidFrameCrc(data, len)) {
+    busMonitorProcessSingleFrameAt(data, len, now);
+    return;
+  }
+
+  // 粘包自动拆帧路径：先切分出所有子帧区间，再按串口波特率反推每帧真实物理完成时刻
+  struct SubSlice {
+    size_t off;
+    size_t len;
+    unsigned long ts;
+  };
+  SubSlice slices[16];
+  size_t count = 0;
+
+  size_t off = 0;
+  while (off < len && count < 16) {
+    size_t rem = len - off;
+    if (off > 0 && hasValidFrameCrc(data + off, rem)) {
+      slices[count++] = {off, rem, now};
+      break;
+    }
+
+    size_t matchedLen = 0;
+    for (size_t subLen = 5; subLen + 4 <= rem; subLen++) {
+      if (isPlausibleModbusSubFrame(data + off, subLen) &&
+          hasValidFrameCrc(data + off, subLen)) {
+        matchedLen = subLen;
+        break;
+      }
+    }
+
+    if (matchedLen > 0) {
+      slices[count++] = {off, matchedLen, now};
+      off += matchedLen;
+    } else {
+      slices[count++] = {off, rem, now};
+      break;
+    }
+  }
+
+  // 从最后一帧完成时刻 (now) 向前还原每一帧的真实物理完成时间戳
+  for (size_t i = count - 1; i > 0; i--) {
+    unsigned long spanMs = calcSubFramePhysicalSpanMs(slices[i].len);
+    slices[i - 1].ts =
+        (slices[i].ts > spanMs) ? (slices[i].ts - spanMs) : slices[i].ts;
+  }
+
+  for (size_t i = 0; i < count; i++) {
+    busMonitorProcessSingleFrameAt(data + slices[i].off, slices[i].len,
+                                   slices[i].ts);
   }
 }

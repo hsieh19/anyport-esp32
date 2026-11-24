@@ -1,6 +1,6 @@
-# AnyPort ESP32 Gateway Firmware (v2.1)
+# AnyPort ESP32 Gateway Firmware (v2.2)
 
-AnyPort 智能工业网关系统固件 v2.1，基于 **ESP32-C3 (`Dual485-Controller-V1`)** 硬件平台构建。本仓库提供工业级多模协议转换、被动总线质量诊断、双主站防碰撞仲裁中继、RESTful JSON API 及高可用双分区远程更新 (OTA) 固件系统。
+AnyPort 智能工业网关系统固件 v2.2，基于 **ESP32-C3 (`Dual485-Controller-V1`)** 硬件平台构建。本仓库提供工业级多模协议转换、被动总线质量诊断、双主站防碰撞仲裁中继、RESTful JSON API 及高可用双分区远程更新 (OTA) 固件系统。
 
 ---
 
@@ -26,9 +26,9 @@ AnyPort 智能工业网关系统固件 v2.1，基于 **ESP32-C3 (`Dual485-Contro
 - **`SimulatorMode.h / .cpp` (Mode 1)**: 工业 Modbus 从站模拟器（支持 RTU 与双网口 TCP 并发访问）。
 - **`TransparentMode.h / .cpp` (Mode 2)**: 高吞吐量、低延迟的 USB-CDC 转 RS485 透明传输。
 - **`BridgeMode.h / .cpp` (Mode 3)**: 标准 Modbus TCP ↔ RTU 双向协议互转（支持总线级与单设备固定从站 ID）。
-- **`BusMonitorMode.h / .cpp` (Mode 4)**: RS485 总线被动监听与通讯质量诊断（纯高阻态只听不发、主从应答配对与 RTT/超时/CRC 误码实时统计）。
+- **`BusMonitorMode.h / .cpp` (Mode 4)**: RS485 总线被动监听与通讯质量诊断（纯高阻态只听不发、智能粘包拆帧与物理时延回溯、主从应答配对与 RTT/超时/CRC 误码实时统计）。
 - **`EthWifiBridgeMode.h / .cpp` (Mode 5)**: 以太网与 WiFi 跨网段流量桥接（支持 `WiFi → W5500` 与 `W5500 → WiFi` 双向 × `TCP / UDP` 双协议透明转发）。
-- **`DualMasterMode.h / .cpp` (Mode 6)**: 双主站防碰撞中继网关（硬件双 RS485 物理隔离 + WiFi TCP 主站互斥仲裁，原生兼容 AnyControl 平台在线热重载）。
+- **`DualMasterMode.h / .cpp` (Mode 6)**: 双主站防碰撞中继网关（硬件双 RS485 物理隔离 + WiFi TCP 主站互斥仲裁，支持总线代理与设备代理双拓扑，原生兼容 AnyControl 平台在线热重载）。
 
 ### 4. 接口适配层与应用内核 (`src/api/` & `src/app/`)
 - **`HttpApiServer.h / .cpp`**: RESTful JSON API 服务器基础设施、CORS / PNA 跨域预检与参数校验器。
@@ -45,12 +45,13 @@ AnyPort 智能工业网关系统固件 v2.1，基于 **ESP32-C3 (`Dual485-Contro
   - **1 - 从站模拟器模式**: 模拟 Modbus RTU/TCP 从站寄存器与动态变化曲线，支持 Web 实时联调。
   - **2 - USB 转 RS485 透传模式**: 纯粹的高速串口透明传输。
   - **3 - Modbus 协议互转模式**: 执行 Modbus TCP 与 RTU 之间的双向协议转换（TCP Server ↔ RTU / RTU ↔ TCP Client）。
-  - **4 - 总线监听与质量诊断模式**: 纯被动高阻态嗅探 RS485 总线，自动配对主从应答并分析通讯成功率、RTT 响应延时、超时丢包与 CRC 误码。
+  - **4 - 总线监听与质量诊断模式**: 纯被动高阻态嗅探 RS485 总线，支持多帧粘包智能拆解与物理时序反向回溯，自动配对主从应答并分析通讯成功率、RTT 响应延时、超时丢包与 CRC 误码。
   - **5 - 以太网-WiFi 桥接模式**: 跨物理网卡、跨网段的 TCP / UDP 双向流量中转。
-  - **6 - 双主站中继网关模式**: 硬件双 RS485 隔离（485-1 主站侧 + 485-2 从站侧）配合 WiFi TCP 主站并发防碰撞仲裁中继。
+  - **6 - 双主站中继网关模式**: 硬件双 RS485 隔离（485-1 主站侧 + 485-2 从站侧）配合 WiFi TCP 主站并发防碰撞仲裁中继，支持**总线代理 (Bus Proxy)** 与 **设备代理 (Device Proxy)** 双拓扑模式，内置多从站粘包扫描剥离与波特率自适应帧间隔。
 - **全局 RS485 端口参数池**:
   - 485-1 与 485-2 的波特率、数据位、校验位、停止位在基础配置层统一定义，各单串口业务模式按所选物理通道自动复用；在模式 6（双主站中继网关模式）下，485-1 与 485-2 共享同一套串口参数（热重载 `/api/gateway/config` 会同步更新两路全局参数）。
-- **双网协同与安全 OTA**:
+- **工业级 WiFi 射频加固与双网协同**:
+  - 彻底关闭 Modem Sleep 消除 DTIM 延时丢包，锁定 19.5dBm 发射功率与 HT20 (20MHz) 窄频宽降噪抗干扰；支持全信道最优 RSSI 择优漫游与掉线 20s 自动重连。
   - 支持 **W5500 硬以太网** 与 **内部 WiFi** 同时在线及底层真实网络参数穿透回显。
   - 集成生产级远程升级系统，支持 24h 自动巡检与 ESP32 原生 A/B 双固件分区一键回滚。
 

@@ -32,7 +32,7 @@ static const int PIN_BOOT_KEY = 9;
 // -----------------------
 // 2. 系统常量定义
 // -----------------------
-#define FIRMWARE_VERSION "2.1"
+#define FIRMWARE_VERSION "2.2"
 
 static constexpr const char *WIFI_AP_SSID = "anyport";
 static constexpr const char *WIFI_AP_PASSWORD = "12345678";
@@ -137,6 +137,8 @@ struct EthWifiConfig {
 
 struct DualMasterConfig {
   String gatewayName;        // 网关设备名称 (全局标识 / AnyControl 平台标识)
+  uint8_t proxyMode;         // 0: 双主站总线代理 (Bus Proxy), 1: 双主站设备代理 (Device Proxy)
+  uint8_t slaveId;           // 设备代理模式下的目标从站地址 (1-247, 默认 1)
   uint32_t masterBaud;       // RS485_A（原主站侧）波特率
   uint8_t masterData;        // 数据位 (7/8)
   uint8_t masterParity;      // 校验位 (0:None, 1:Even, 2:Odd)

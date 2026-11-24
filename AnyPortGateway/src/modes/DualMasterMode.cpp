@@ -42,9 +42,41 @@ void DualMasterMode::reconfigSerial() {
                     PIN_RS485_2_TX);
 
   APP_LOG("[DM] Dual RS485 initialized: 485-1(UART0,GPIO2/3)=%u, "
-          "485-2(UART1,GPIO5/4)=%u, Timeout=%ums",
+          "485-2(UART1,GPIO5/4)=%u, Mode=%u, SlaveId=%u, Timeout=%ums",
           g_rs485_1Config.baud, g_rs485_2Config.baud,
+          g_dualMasterConfig.proxyMode, g_dualMasterConfig.slaveId,
           g_dualMasterConfig.masterTimeout);
+}
+
+// 根据波特率计算 Modbus RTU 帧间静默阈值 (3.5T + 安全裕量)
+static unsigned long getInterFrameGapMs(uint32_t baud) {
+  if (baud == 0) baud = 9600;
+  if (baud <= 2400) return 20;
+  if (baud <= 4800) return 10;
+  if (baud <= 9600) return 6;
+  return 4;
+}
+
+static bool isValidCrcFrame(const uint8_t *buf, size_t len) {
+  if (len < 4) return false;
+  uint16_t rxCrc = (buf[len - 1] << 8) | buf[len - 2];
+  return calculateCRC16(buf, len - 2) == rxCrc;
+}
+
+// 根据 Modbus RTU 主站请求功能码推算标准请求帧总长度 (含从站地址与 2 字节 CRC)
+static size_t getExpectedMasterReqLen(const uint8_t *buf, size_t availLen) {
+  if (availLen < 8) return 0;
+  uint8_t fc = buf[1];
+  if ((fc & 0x80) != 0) return 0;
+  if (fc >= 0x01 && fc <= 0x06) {
+    return 8;
+  }
+  if (fc == 0x0F || fc == 0x10) {
+    uint8_t byteCount = buf[6];
+    size_t total = static_cast<size_t>(9 + byteCount);
+    return (byteCount > 0 && total <= 256) ? total : 0;
+  }
+  return 8;
 }
 
 static size_t forwardAndCollectResponse(const uint8_t *reqBuf, size_t reqLen,
@@ -114,6 +146,12 @@ static void processWifiMasterClient(WiFiClient &client) {
       }
 
       if (pduLen == len) {
+        // 双主站设备代理模式下，仅放行匹配目标从站 ID 的请求
+        if (g_dualMasterConfig.proxyMode == 1 &&
+            uid != g_dualMasterConfig.slaveId) {
+          return;
+        }
+
         uint16_t crc = calculateCRC16(rtuFrame, len);
         rtuFrame[len] = crc & 0xFF;
         rtuFrame[len + 1] = crc >> 8;
@@ -124,8 +162,7 @@ static void processWifiMasterClient(WiFiClient &client) {
             rtuFrame, len + 2, respBuf, sizeof(respBuf), timeoutMs);
 
         if (respLen >= 4) {
-          uint16_t rxCrc = (respBuf[respLen - 1] << 8) | respBuf[respLen - 2];
-          if (calculateCRC16(respBuf, respLen - 2) == rxCrc) {
+          if (isValidCrcFrame(respBuf, respLen)) {
             g_telemetry.master2FrameCount++;
             uint8_t tcpResp[260];
             tcpResp[0] = (tid >> 8);
@@ -170,21 +207,57 @@ void DualMasterMode::loop() {
     s_masterLastByteMs = millis();
   }
 
+  unsigned long gapMs = getInterFrameGapMs(g_rs485_1Config.baud);
   if (s_masterRxLen > 0 &&
-      (millis() - s_masterLastByteMs > 15 ||
+      (millis() - s_masterLastByteMs >= gapMs ||
        s_masterRxLen >= sizeof(s_masterRxBuf))) {
     if (s_masterRxLen >= 4) {
-      uint16_t rxCrc = (s_masterRxBuf[s_masterRxLen - 1] << 8) |
-                       s_masterRxBuf[s_masterRxLen - 2];
-      if (calculateCRC16(s_masterRxBuf, s_masterRxLen - 2) == rxCrc) {
+      const uint8_t *reqPtr = nullptr;
+      size_t reqLen = 0;
+
+      if (g_dualMasterConfig.proxyMode == 1) {
+        // 模式 B：双主站设备代理 (485-1 挂在公共多点总线上，仅认领发给 slaveId 的请求)
+        uint8_t targetId = g_dualMasterConfig.slaveId;
+        if (s_masterRxBuf[0] == targetId &&
+            isValidCrcFrame(s_masterRxBuf, s_masterRxLen)) {
+          reqPtr = s_masterRxBuf;
+          reqLen = s_masterRxLen;
+        } else {
+          // 防粘包扫描：从多点总线粘连缓冲中剥离并发给 targetId 的主站请求帧
+          for (size_t off = 0; off + 8 <= s_masterRxLen; off++) {
+            if (s_masterRxBuf[off] != targetId) continue;
+            size_t expLen = getExpectedMasterReqLen(
+                s_masterRxBuf + off, s_masterRxLen - off);
+            if (expLen >= 8 && off + expLen <= s_masterRxLen &&
+                isValidCrcFrame(s_masterRxBuf + off, expLen)) {
+              reqPtr = s_masterRxBuf + off;
+              reqLen = expLen;
+              break;
+            }
+          }
+          // 仅当报文以目标从站地址开头但自身校验失败时才计入 CRC 错误，忽略其它从站流量
+          if (!reqPtr && s_masterRxBuf[0] == targetId) {
+            g_telemetry.busCrcErrorCount++;
+          }
+        }
+      } else {
+        // 模式 A：双主站总线代理 (485-1 接原主站出口，代理整条从站总线)
+        if (isValidCrcFrame(s_masterRxBuf, s_masterRxLen)) {
+          reqPtr = s_masterRxBuf;
+          reqLen = s_masterRxLen;
+        } else {
+          g_telemetry.busCrcErrorCount++;
+        }
+      }
+
+      if (reqPtr && reqLen >= 4) {
         uint8_t respBuf[260];
         uint16_t timeoutMs = getSafeSlaveTimeoutMs();
         size_t respLen = forwardAndCollectResponse(
-            s_masterRxBuf, s_masterRxLen, respBuf, sizeof(respBuf), timeoutMs);
+            reqPtr, reqLen, respBuf, sizeof(respBuf), timeoutMs);
 
         if (respLen >= 4) {
-          uint16_t txCrc = (respBuf[respLen - 1] << 8) | respBuf[respLen - 2];
-          if (calculateCRC16(respBuf, respLen - 2) == txCrc) {
+          if (isValidCrcFrame(respBuf, respLen)) {
             g_telemetry.master1FrameCount++;
             s_masterSerial.write(respBuf, respLen);
             s_masterSerial.flush();
@@ -192,8 +265,6 @@ void DualMasterMode::loop() {
             g_telemetry.busCrcErrorCount++;
           }
         }
-      } else {
-        g_telemetry.busCrcErrorCount++;
       }
     }
     s_masterRxLen = 0;
