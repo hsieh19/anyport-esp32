@@ -1,6 +1,6 @@
-# AnyPort ESP32 Gateway Firmware (v2.2)
+# AnyPort ESP32 Gateway Firmware (v2.3)
 
-AnyPort 智能工业网关系统固件 v2.2，基于 **ESP32-C3 (`Dual485-Controller-V1`)** 硬件平台构建。本仓库提供工业级多模协议转换、被动总线质量诊断、双主站防碰撞仲裁中继、RESTful JSON API 及高可用双分区远程更新 (OTA) 固件系统。
+AnyPort 智能工业网关系统固件 v2.3，基于 **ESP32-C3 (`Dual485-Controller-V1`)** 硬件平台构建。本仓库提供工业级多模协议转换、被动总线质量诊断、双主站防碰撞仲裁中继、RESTful JSON API 及高可用双分区远程更新 (OTA) 固件系统。
 
 ---
 

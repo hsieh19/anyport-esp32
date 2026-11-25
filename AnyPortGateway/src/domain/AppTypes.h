@@ -32,7 +32,7 @@ static const int PIN_BOOT_KEY = 9;
 // -----------------------
 // 2. 系统常量定义
 // -----------------------
-#define FIRMWARE_VERSION "2.2"
+#define FIRMWARE_VERSION "2.3"
 
 static constexpr const char *WIFI_AP_SSID = "anyport";
 static constexpr const char *WIFI_AP_PASSWORD = "12345678";

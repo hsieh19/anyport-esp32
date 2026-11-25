@@ -1,4 +1,4 @@
-# AnyPort 设备 HTTP API (v2.2)
+# AnyPort 设备 HTTP API (v2.3)
 
 设备端遵循前后端分离架构，只提供 RESTful JSON API（及 `GET /` 极简应急配网页），完整管理控制台已集成至 AnyPort 前端主项目的「🎛️ 网关控制台」。固件版本见 `GET /api/sys/status`。
 
@@ -19,7 +19,7 @@
 ### 系统与状态遥测
 | 方法 | 路径 | 说明 |
 | :-- | :-- | :-- |
-| GET | `/api/sys/status` | 返回全局硬件、双网实时网络参数与总线通信遥测：`version` `firmware` `gatewayName` `mode` `rs485Channel` `wifiConnected` `wifiIp` `wifiMask` `wifiGw` `wifiDns` `wifiIsStatic` `ethLink` `ethIp` `ethMask` `ethGw` `ethDns` `ethIsStatic` `cpu` `ram`(%) `flash`(%) `rssi` `chipTemp`(℃) `uptime`(s) `heartbeatInterval` `busLatencyMs` `master1Frames` `master2Frames` `busCrcErrors`。<br>**临时维护 AP 与 IP 回显约定**：无论 DHCP 还是静态 IP 模式，网关每次上电/重启连上路由器后（以及运行中短按板载 `BOOT` 键 `GPIO 9` 时），均会开启 `WIFI_AP_STA` 临时维护热点（`anyport` / `192.168.4.1`，当 STA 子网为 `192.168.4.x` 时跳过）；前端在保存重启后可继续轮询 `/api/sys/status` 获取新分配或变更后的 `wifiIp`，当 AP 连续 3 分钟无客户端连接时自动关闭热点切换为纯 `WIFI_STA`。 |
+| GET | `/api/sys/status` | 返回全局硬件、双网实时网络参数与总线通信遥测：`version` `firmware` `gatewayName` `mode` `mqttConnected` `rs485Channel` `wifiConnected` `wifiIp` `wifiMask` `wifiGw` `wifiDns` `wifiIsStatic` `ethLink` `ethIp` `ethMask` `ethGw` `ethDns` `ethIsStatic` `cpu` `ram`(%) `flash`(%) `rssi` `chipTemp`(℃) `uptime`(s) `heartbeatInterval` `busLatencyMs` `master1Frames` `master2Frames` `busCrcErrors`。<br>**临时维护 AP 与 IP 回显约定**：无论 DHCP 还是静态 IP 模式，网关每次上电/重启连上路由器后（以及运行中短按板载 `BOOT` 键 `GPIO 9` 时），均会开启 `WIFI_AP_STA` 临时维护热点（`anyport` / `192.168.4.1`，当 STA 子网为 `192.168.4.x` 时跳过）；前端在保存重启后可继续轮询 `/api/sys/status` 获取新分配或变更后的 `wifiIp`，当 AP 连续 3 分钟无客户端连接时自动关闭热点切换为纯 `WIFI_STA`。 |
 | GET | `/api/status` | 轻量状态查询：`mode` `uptime` |
 | POST | `/api/mode` | 请求体 `{"mode":0..6}`，保存工作模式并重启 |
 
@@ -73,6 +73,8 @@
 | POST | `/api/ota/rollback` | 一键回滚至备用 OTA 分区并重启 |
 
 ## 变更记录
+- **v2.3**：
+  - **系统遥测支持 MQTT 网关在线状态感知**：在 `/api/sys/status` 遥测接口中新增 `mqttConnected` 布尔字段。当网关处于 Mode 0（MQTT 网关模式）时，实时暴露与云端/本地 MQTT Broker 的长连接保活状态，便于控制台面板无延迟精准感知通信链路健康度。
 - **v2.2**：
   - **双主站中继网关 (Mode 6) 双拓扑架构**：新增 `proxyMode`（`0`: 总线代理 Bus Proxy，`1`: 设备代理 Device Proxy）与目标从站地址 `slaveId` (1..247) 配置；在设备代理模式下并联多从站公共总线，自动扫描剥离 `slaveId` 目标请求帧并静默旁路其他从站流量，避免误报 CRC 错误；485-1 接收超时弃用固定 15ms，改用波特率自适应计算 3.5T 字符间隔；WiFi 主站接入从站 ID 权限过滤。
   - **总线监听诊断 (Mode 4) 智能粘包切分引擎**：引入标准 Modbus PDU 结构启发式判定与 3.5T + 串口物理耗时推算；支持将密集轮询下的串口粘包自动切分为最多 16 个合法 CRC 子帧切片，并从最后一帧完成时刻向前回溯各子帧真实物理完成时间戳，彻底消除粘包对从站 RTT 与主从配对的干扰。

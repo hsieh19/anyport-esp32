@@ -9,4 +9,5 @@ class GatewayMode : public IWorkMode {
 public:
   void begin() override;
   void loop() override;
+  static bool isMqttConnected();
 };

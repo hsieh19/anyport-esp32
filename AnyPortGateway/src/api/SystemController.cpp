@@ -3,6 +3,7 @@
 #include "../infra/ConfigStore.h"
 #include "../infra/OtaService.h"
 #include "../modes/DualMasterMode.h"
+#include "../modes/GatewayMode.h"
 #include "HttpApiServer.h"
 #include <Ethernet.h>
 #include <WiFi.h>
@@ -72,6 +73,8 @@ static void handleSystemStatus() {
   // 全局硬件与总线通信遥测字段 (所有工作模式共享 + 100% 兼容 AnyControl 平台)
   doc["gatewayName"] = g_dualMasterConfig.gatewayName;
   doc["firmware"] = FIRMWARE_VERSION;
+  doc["mqttConnected"] =
+      (g_workMode == WorkMode::GATEWAY) && GatewayMode::isMqttConnected();
   doc["heartbeatInterval"] = g_dualMasterConfig.heartbeatInterval;
   doc["busLatencyMs"] = g_telemetry.lastBusLatencyMs;
   doc["master1Frames"] = g_telemetry.master1FrameCount;

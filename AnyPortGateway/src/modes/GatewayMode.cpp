@@ -503,3 +503,7 @@ void GatewayMode::loop() {
     }
   }
 }
+
+bool GatewayMode::isMqttConnected() {
+  return s_mqttClient.connected();
+}
